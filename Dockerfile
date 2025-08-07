@@ -9,5 +9,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 残りのアプリケーションコードをコピー
 COPY . ./
 
-# コンテナ起動時にSlackボットを実行
 CMD ["python", "main.py"]

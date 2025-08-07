@@ -1,3 +1,4 @@
+
 """幹事郎プロジェクトで使用されるLLMベースのエージェント。"""
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from .base_agent import BaseAgent
 
 
 class LLMAgent(BaseAgent):
+
     """OpenAIのチャットモデルで応答を生成するエージェント。"""
 
     def __init__(
@@ -39,6 +41,7 @@ class LLMAgent(BaseAgent):
             model=self.model,
             messages=[
                 {"role": "system", "content": self.system_prompt},
+
                 {"role": "user", "content": message},
             ],
         )
