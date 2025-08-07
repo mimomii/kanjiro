@@ -41,11 +41,17 @@ pip install -r requirements.txt
 - SLACK_BOT_TOKEN (ボットトークン)
 - SLACK_APP_TOKEN (Socket Mode用)
 - OPENAI_API_KEY
+- OPENAI_MODEL (任意: 使用するモデル名。未指定の場合は`gpt-3.5-turbo`)
 
 4. 起動：
 ```bash
 python main.py
 ```
+
+## 💬 Slackでの動作
+
+- チャンネルでボットをメンションすると **ShikiriTagariAgent** が応答します。
+- ボットとのDMでは **HanashiKikokaAgent** が個別にヒアリングします。
 
 ## 🤖 実装済みエージェント一覧
 
@@ -53,9 +59,9 @@ python main.py
 |----------------|----------|------|
 | ShikiriTagariAgent | shikiri_tagari.py | 日程調整・仕切り役 |
 | ReadAirAgent        | read_air.py | 空気読み |
-| HanashiKikokaAgent  | hanashi_kikoka.py | 話の要点整理 |
-| KennsakuKennsakuAgent | kennsaku_kennsaku.py | お店検索（仮） |
-| LLMAgent | llm_agent.py | OpenAI LLMによる応答 |
+| HanashiKikokaAgent  | hanashi_kikoka.py | 個人チャットで希望をヒアリング |
+| KennsakuKennsakuAgent | kennsaku_kennsaku.py | お店検索・予約候補提示 |
+| LLMAgent | llm_agent.py | ベースとなるLLMエージェント |
 
 ## 🔜 今後の予定
 
