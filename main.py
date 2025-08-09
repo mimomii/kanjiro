@@ -13,6 +13,22 @@ load_dotenv()
 
 # ボットトークンを使ってSlack Boltアプリを初期化
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+llm_agent = LLMAgent()
+
+
+# 各役割のエージェントを生成
+shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
+read_air_agent = ReadAirAgent()  # すべてを観察して指示
+hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
+kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
+
+
+# 各役割のエージェントを生成
+shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
+read_air_agent = ReadAirAgent()  # すべてを観察して指示
+hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
+kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
+
 
 # Slackへの応答に利用する単一のLLMエージェントを生成
 llm_agent = LLMAgent()
@@ -29,6 +45,7 @@ def handle_mention(event, say):
 
     # 受け取ったメッセージをLLMに渡し、その結果をそのまま返信
     response = llm_agent.respond(prompt)
+
     say(f"<@{user}> {response}")
 
 
@@ -38,8 +55,10 @@ def handle_dm(event, say):
     if event.get("channel_type") != "im":
         return
     text = event.get("text", "")
+
     # ダイレクトメッセージでも同様にLLMで応答
     response = llm_agent.respond(text)
+
     say(response)
 
 
