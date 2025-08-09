@@ -48,4 +48,3 @@ class LLMAgent(BaseAgent):
         response = self.model.generate_content(message)
         return response.text.strip()
 
-

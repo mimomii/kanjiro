@@ -6,12 +6,7 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from app.agent import (
-    HanashiKikokaAgent,
-    KennsakuKennsakuAgent,
-    ReadAirAgent,
-    ShikiriTagariAgent,
-)
+from app.agent import LLMAgent
 
 # 開発時にローカルの .env ファイルから環境変数を読み込む
 load_dotenv()
@@ -35,6 +30,10 @@ hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
 kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
 
 
+# Slackへの応答に利用する単一のLLMエージェントを生成
+llm_agent = LLMAgent()
+
+
 @app.event("app_mention")
 def handle_mention(event, say):
     """メンションされた際にLLMで生成したメッセージで応答する。"""
@@ -44,9 +43,9 @@ def handle_mention(event, say):
     prompt = text.split("<@", 1)[-1]
     prompt = prompt.split(">", 1)[-1].strip()
 
-    # 観察役のエージェントに読ませた後、仕切り役に返信させる
-    read_air_agent.respond(prompt)
-    response = shikiri_agent.respond(prompt)
+    # 受け取ったメッセージをLLMに渡し、その結果をそのまま返信
+    response = llm_agent.respond(prompt)
+
     say(f"<@{user}> {response}")
 
 
@@ -56,9 +55,10 @@ def handle_dm(event, say):
     if event.get("channel_type") != "im":
         return
     text = event.get("text", "")
-    # 個別のメッセージも空気読みエージェントが観察して希望を把握
-    read_air_agent.respond(text)
-    response = hanashi_agent.respond(text)
+
+    # ダイレクトメッセージでも同様にLLMで応答
+    response = llm_agent.respond(text)
+
     say(response)
 
 

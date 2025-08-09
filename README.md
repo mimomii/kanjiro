@@ -50,8 +50,9 @@ python main.py
 
 ## 💬 Slackでの動作
 
-- チャンネルでボットをメンションすると **ShikiriTagariAgent** が応答します。
-- ボットとのDMでは **HanashiKikokaAgent** が個別にヒアリングします。
+- チャンネルでボットをメンションすると、単一の **LLMAgent** がメッセージを生成して返信します。
+- ボットとのDMでも同じLLMAgentが応答します。
+
 
 ## 🤖 実装済みエージェント一覧
 
