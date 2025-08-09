@@ -6,14 +6,15 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from openai import OpenAI
+
+import google.generativeai as genai
 
 from .base_agent import BaseAgent
 
 
 class LLMAgent(BaseAgent):
 
-    """OpenAIのチャットモデルで応答を生成するエージェント。"""
+    """Geminiのチャットモデルで応答を生成するエージェント。"""
 
     def __init__(
         self,
@@ -22,9 +23,12 @@ class LLMAgent(BaseAgent):
         model: Optional[str] = None,
     ) -> None:
         super().__init__(name)
-        # OpenAIクライアントを設定。APIキーが指定されない場合は環境変数などから取得する。
-        api_key = os.environ.get("OPENAI_API_KEY")
-        self.client = OpenAI(api_key=api_key) if api_key else OpenAI()
+
+        # Geminiクライアントを設定。APIキーが指定されない場合は環境変数などから取得する。
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if api_key:
+            genai.configure(api_key=api_key)
+
 
         # エージェントの振る舞いを定義するシステムプロンプト。
         # 各サブクラスは役割に応じて独自のプロンプトを渡せる。
@@ -32,18 +36,16 @@ class LLMAgent(BaseAgent):
             system_prompt or "あなたは日本語で応答する有能なアシスタントです。"
         )
 
-        # 使用するモデルは環境変数で上書きでき、デフォルトはgpt-3.5-turbo
-        self.model = model or os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
+        # 使用するモデルは環境変数で上書きでき、デフォルトは gemini-1.5-flash
+        self.model_name = model or os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        self.model = genai.GenerativeModel(
+            model_name=self.model_name,
+            system_instruction=self.system_prompt,
+        )
 
     def respond(self, message: str) -> str:
-        # 会話をOpenAIのChat Completions APIに送信し、最初の応答を返す。
-        completion = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.system_prompt},
+        # 会話をGeminiモデルに送信し、最初の応答テキストを返す。
+        response = self.model.generate_content(message)
+        return response.text.strip()
 
-                {"role": "user", "content": message},
-            ],
-        )
-        return completion.choices[0].message["content"].strip()
 

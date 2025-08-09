@@ -40,8 +40,8 @@ pip install -r requirements.txt
 
 - SLACK_BOT_TOKEN (ボットトークン)
 - SLACK_APP_TOKEN (Socket Mode用)
-- OPENAI_API_KEY
-- OPENAI_MODEL (任意: 使用するモデル名。未指定の場合は`gpt-3.5-turbo`)
+ - GEMINI_API_KEY
+ - GEMINI_MODEL (任意: 使用するモデル名。未指定の場合は`gemini-1.5-flash`)
 
 4. 起動：
 ```bash
