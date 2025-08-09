@@ -1,3 +1,4 @@
+
 """幹事郎プロジェクトで使用されるLLMベースのエージェント。"""
 
 from __future__ import annotations
@@ -5,12 +6,14 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+
 import google.generativeai as genai
 
 from .base_agent import BaseAgent
 
 
 class LLMAgent(BaseAgent):
+
     """Geminiのチャットモデルで応答を生成するエージェント。"""
 
     def __init__(
@@ -20,10 +23,12 @@ class LLMAgent(BaseAgent):
         model: Optional[str] = None,
     ) -> None:
         super().__init__(name)
+
         # Geminiクライアントを設定。APIキーが指定されない場合は環境変数などから取得する。
         api_key = os.environ.get("GEMINI_API_KEY")
         if api_key:
             genai.configure(api_key=api_key)
+
 
         # エージェントの振る舞いを定義するシステムプロンプト。
         # 各サブクラスは役割に応じて独自のプロンプトを渡せる。
@@ -42,4 +47,5 @@ class LLMAgent(BaseAgent):
         # 会話をGeminiモデルに送信し、最初の応答テキストを返す。
         response = self.model.generate_content(message)
         return response.text.strip()
+
 

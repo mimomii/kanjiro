@@ -18,6 +18,15 @@ load_dotenv()
 
 # ボットトークンを使ってSlack Boltアプリを初期化
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+llm_agent = LLMAgent()
+
+
+# 各役割のエージェントを生成
+shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
+read_air_agent = ReadAirAgent()  # すべてを観察して指示
+hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
+kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
+
 
 # 各役割のエージェントを生成
 shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
