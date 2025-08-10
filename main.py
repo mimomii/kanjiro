@@ -6,32 +6,29 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from app.agent import LLMAgent
+# 各エージェントをまとめてインポート
+from app.agent import (
+    LLMAgent,
+    ShikiriTagariAgent,
+    ReadAirAgent,
+    HanashiKikokaAgent,
+    KennsakuKennsakuAgent,
+)
 
 # 開発時にローカルの .env ファイルから環境変数を読み込む
 load_dotenv()
 
 # ボットトークンを使ってSlack Boltアプリを初期化
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
-llm_agent = LLMAgent()
-
-
-# 各役割のエージェントを生成
-shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
-read_air_agent = ReadAirAgent()  # すべてを観察して指示
-hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
-kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
-
-
-# 各役割のエージェントを生成
-shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
-read_air_agent = ReadAirAgent()  # すべてを観察して指示
-hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
-kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
-
 
 # Slackへの応答に利用する単一のLLMエージェントを生成
 llm_agent = LLMAgent()
+
+# 各役割のエージェントを生成（現状は未使用だが将来利用予定）
+shikiri_agent = ShikiriTagariAgent()  # グループ会話をリード
+read_air_agent = ReadAirAgent()  # すべてを観察して指示
+hanashi_agent = HanashiKikokaAgent()  # 個別DMを担当
+kennsaku_agent = KennsakuKennsakuAgent()  # 店舗検索を担当
 
 
 @app.event("app_mention")
