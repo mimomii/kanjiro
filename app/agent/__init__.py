@@ -1,6 +1,5 @@
-"""Agent package exposing LLMAgent only."""
+"""Agent package exposing LLM-based agents."""
 
-from .llm_agent import LLMAgent
+from .llm_agent import SummarizerAgent, ConversationalAgent, LLMAgent
 
-__all__ = ["LLMAgent"]
-
+__all__ = ["SummarizerAgent", "ConversationalAgent", "LLMAgent"]
