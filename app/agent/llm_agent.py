@@ -5,14 +5,26 @@ from __future__ import annotations
 import json
 import os
 import re
+import logging
 from typing import Any, Dict, Optional, Tuple
 
 import google.generativeai as genai
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 
 DEFAULT_SYSTEM_PROMPT = "あなたは日本語で応答する有能なアシスタントです。"
 EMPTY_JSON = {"decisions": [], "open_issues": [], "context": [], "links": []}
 
 SummaryPayload = Dict[str, Any]
+
+
+def _safe(text: Optional[str], limit: int = 500) -> str:
+    if not text:
+        return ""
+    s = str(text)
+    return s if len(s) <= limit else s[:limit] + f"...(len={len(s)})"
 
 
 class SummarizerAgent:
@@ -26,6 +38,7 @@ class SummarizerAgent:
         genai.configure(api_key=api_key)
         self.model_name = model or os.environ.get("GEMINI_MODEL_SUM", "gemini-1.5-flash")
         self.model = genai.GenerativeModel(model_name=self.model_name)
+        logger.info("SummarizerAgent initialized with model=%s", self.model_name)
 
     def summarize(
         self,
@@ -46,7 +59,16 @@ class SummarizerAgent:
         try:
             res = self.model.generate_content(prompt)
             raw = (res.text or "").strip()
+            logger.debug(
+                "SummarizerAgent.generate_content ok. prompt=%s raw_len=%d",
+                _safe(prompt, 300),
+                len(raw),
+            )
         except Exception:
+            logger.exception(
+                "SummarizerAgent.generate_content failed. prompt=%s",
+                _safe(prompt, 300),
+            )
             raw = ""
         js = self._extract_json(raw)
         text_only = raw
@@ -130,6 +152,11 @@ class ConversationalAgent:
             model_name=self.model_name,
             system_instruction=self.system_prompt,
         )
+        logger.info(
+            "ConversationalAgent(%s) initialized with model=%s",
+            self.name,
+            self.model_name,
+        )
 
     def reply(self, summary: Optional[SummaryPayload], user_text: str) -> str:
         if not user_text or not user_text.strip():
@@ -139,14 +166,28 @@ class ConversationalAgent:
         summary_text = summary.get("text", "")
         prefix = f"これまでの要約(ver.{version}):\n{summary_text}\n" if summary_text else ""
         prompt = prefix + f"ユーザー: {user_text}"
+
         try:
+            logger.debug(
+                "ConversationalAgent.reply generating... name=%s prompt=%s",
+                self.name,
+                _safe(prompt, 500),
+            )
             res = self.model.generate_content(prompt)
             text = (res.text or "").strip()
+            logger.debug(
+                "ConversationalAgent.reply ok. out_len=%d",
+                len(text),
+            )
             if not text:
                 return "すみません、うまく答えを生成できませんでした。もう少し具体的に教えてください。"
             return text
         except Exception:
-            # Slack で黙らないためのフォールバックだが、内部エラー詳細はユーザーに開示しない
+            logger.exception(
+                "ConversationalAgent.reply failed. name=%s prompt=%s",
+                self.name,
+                _safe(prompt, 500),
+            )
             return "エラーが発生しました。少し時間をおいて再試行してください。"
 
 
