@@ -1,71 +1,58 @@
-# 幹事郎 - Slack幹事AIエージェント
+# Kanjiro Minimal Slack App
 
-## 📌 概要
-Slack上で動作する幹事AI「幹事郎」は、飲み会の日程調整・お店探し・空気読みなどを行うマルチエージェントシステムです。
+Slack Bolt(Socket Mode) と FastAPI を併用し、Gemini を利用した会話エージェントと要約エージェントを提供する最小構成です。各ターンで会話要約を更新・保存し、その要約を基に返信を生成します。
 
-## 📁 ディレクトリ構成
+## ディレクトリ構成
 
 ```
-kanjiro/
-├── Dockerfile
-├── app/
-│   └── agent/
-│       ├── __init__.py
-│       ├── base_agent.py
-│       ├── hanashi_kikoka.py
-│       ├── kennsaku_kennsaku.py
-│       ├── llm_agent.py
-│       ├── read_air.py
-│       └── shikiri_tagari.py
-├── main.py
-├── requirements.txt
-└── .env  (← 手動で作成)
+project_root/
+├─ main.py
+├─ .env
+├─ requirements.txt
+├─ data/
+├─ app/
+│  ├─ __init__.py
+│  ├─ agent/
+│  │  ├─ __init__.py
+│  │  └─ llm_agent.py
+│  └─ storage/
+│     ├─ __init__.py
+│     └─ dao.py
 ```
 
-## 🛠 セットアップ手順（venv 開発）
+## 環境変数 (.env)
 
-1. 仮想環境を作成・有効化：
-```bash
-cd ~/projects/ai_agents/kanjiro
-python3 -m venv .venv
-source .venv/bin/activate
+```ini
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+
+# 要約エージェント
+GEMINI_API_KEY_SUM=AIza...sum
+GEMINI_MODEL_SUM=gemini-1.5-flash
+
+# 会話エージェント
+GEMINI_API_KEY_CONV=AIza...conv
+GEMINI_MODEL_CONV=gemini-1.5-pro
+
+DB_PATH=./data/kanjiro.sqlite3
+PORT=8000
 ```
 
-2. パッケージインストール：
+## セットアップ & 起動
+
 ```bash
 pip install -r requirements.txt
-```
-
-3. `.env` に環境変数を設定：
-
-- SLACK_BOT_TOKEN (ボットトークン)
-- SLACK_APP_TOKEN (Socket Mode用)
- - GEMINI_API_KEY
- - GEMINI_MODEL (任意: 使用するモデル名。未指定の場合は`gemini-1.5-flash`)
-
-4. 起動：
-```bash
 python main.py
 ```
 
-## 💬 Slackでの動作
+Slack Socket Mode で接続し、FastAPI は `http://localhost:8000/health` でヘルスチェックできます。
 
-- チャンネルでボットをメンションすると、単一の **LLMAgent** がメッセージを生成して返信します。
-- ボットとのDMでも同じLLMAgentが応答します。
+## API
 
+- `GET /health` : 稼働確認
+- `GET /conversations/{conv_id}/summary/latest` : 指定会話の最新要約を取得
 
-## 🤖 実装済みエージェント一覧
+## 動作
 
-| エージェント名 | ファイル | 機能 |
-|----------------|----------|------|
-| ShikiriTagariAgent | shikiri_tagari.py | 日程調整・仕切り役 |
-| ReadAirAgent        | read_air.py | 空気読み |
-| HanashiKikokaAgent  | hanashi_kikoka.py | 個人チャットで希望をヒアリング |
-| KennsakuKennsakuAgent | kennsaku_kennsaku.py | お店検索・予約候補提示 |
-| LLMAgent | llm_agent.py | ベースとなるLLMエージェント |
-
-## 🔜 今後の予定
-
-- [ ] Slackメッセージの分類 → 担当エージェント自動割当
-- [ ] Webhook対応（FastAPI導入）
-- [ ] Dockerコンテナ実行対応
+- SlackでのメンションまたはDMを受け取ると、要約を更新してSQLiteに保存し、要約に基づいて返信します。
+- 要約は `summaries` テーブルでバージョン管理され、同一入力の場合は再登録しません。
