@@ -1,8 +1,7 @@
 # 幹事郎 - Slack幹事AIエージェント
 
 ## 📌 概要
-Slack上で動作する幹事AI「幹事郎」は、飲み会の日程調整やお店探しを支援するシンプルなボットです。
-グループチャットでメンバーから意見を集め、最終的な日時や場所、お店の候補を提案します。
+Slack 上で動作するシンプルな幹事ボットです。チャンネルでボットをメンションすると、Hot Pepper グルメ API を使って周辺のお店を検索し、Gemini を用いた LLM が簡潔なおすすめコメントを返します。
 
 ## 📁 ディレクトリ構成
 ```
@@ -12,6 +11,8 @@ kanjiro/
 │   ├── agent/
 │   │   ├── __init__.py
 │   │   └── llm_agent.py
+│   ├── services/
+│   │   └── hotpepper.py
 │   └── minimal_context_memory.py
 ├── main.py
 ├── requirements.txt
@@ -39,23 +40,15 @@ kanjiro/
    python main.py
    ```
 
-## 💬 Slackでの動作
-- チャンネルでボットをメンションすると、**LLMAgent** がメッセージを生成して返信します。
+## 💬 Slack での動作
+- チャンネルでボットをメンションし、エリアやジャンルなど検索キーワードを送ると、上位のお店候補とおすすめコメントを返します。
 - DM には応答しません。
 - チャンネルごとに会話コンテキストを保持し、`ConversationBufferMemory` とローリング要約を併用して長い対話も処理します。
 
-## 📚 会話コンテキストの例
-`app/minimal_context_memory.py` は、外部ストレージを使わずに
-`ConversationBufferMemory` とローリング要約を組み合わせてコンテキストを
-保持する最小サンプルです。Gemini APIキーを2つ用意し、応答生成用と要約専用
-に分けています。Slack bot でも同じ仕組みを利用しています。
-
 ## 🔌 Hot Pepper API キーの取得
-`HOTPEPPER_API_KEY` は [Hot Pepper グルメ API](https://webservice.recruit.co.jp/) から
-発行できます。無料の会員登録後、アプリケーションを登録して取得したキーを
-`.env` または環境変数に設定してください。
+`HOTPEPPER_API_KEY` は [Hot Pepper グルメ API](https://webservice.recruit.co.jp/) から発行できます。無料の会員登録後、アプリケーションを登録して取得したキーを `.env` または環境変数に設定してください。
 
 ## 🔜 今後の予定
-- [ ] Slackメッセージの分類 → 担当エージェント自動割当
-- [ ] Webhook対応（FastAPI導入）
-- [ ] Dockerコンテナ実行対応
+- [ ] Slack メッセージの分類 → 担当エージェント自動割当
+- [ ] Webhook 対応（FastAPI 導入）
+- [ ] Docker コンテナ実行対応
