@@ -1,8 +1,9 @@
-"""Example using ConversationSummaryBufferMemory with Gemini.
+"""Minimal context memory example using Gemini.
 
-This script demonstrates how to combine ConversationBufferMemory and a rolling
-summary to maintain context without external storage. Two Gemini API keys are
-used: one for generating responses and another for summarization.
+This module combines ``ConversationBufferMemory`` with a rolling summary so the
+conversation can maintain context without relying on external storage. Two
+Gemini API keys are used: one for generating responses and another dedicated to
+summarisation.
 """
 
 import os
@@ -37,7 +38,7 @@ def build_conversation() -> ConversationChain:
     return ConversationChain(llm=main_llm, memory=memory, verbose=True)
 
 
-def demo_run(user_inputs: List[str]) -> None:
+def run_demo(user_inputs: List[str]) -> None:
     """Run a short demonstration conversation."""
     conversation = build_conversation()
     for text in user_inputs:
@@ -56,4 +57,4 @@ if __name__ == "__main__":
         "ありがとう。週末のイベントを教えて。",
         "そのイベントは屋内？チケットいる？",
     ]
-    demo_run(sample_inputs)
+    run_demo(sample_inputs)
