@@ -1,6 +1,7 @@
-"""Slack でメンションとDMにだけ応答する最小構成。
+"""Slack でメンションにのみ応答する最小構成。
 
-チャンネルごとに会話コンテキストを保持する。"""
+飲み会の日時や場所、お店の候補を決めるためにチャンネルごとの
+会話コンテキストを保持する。"""
 
 import os
 import sys
@@ -24,7 +25,7 @@ if missing:
     sys.exit(1)
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
-llm = LLMAgent()  # 日本語で答えるデフォルト設定
+llm = LLMAgent()  # 飲み会幹事用のエージェント
 
 
 def _strip_mention(text: str) -> str:
@@ -44,17 +45,6 @@ def on_mention(event, say):
     prompt = _strip_mention(event.get("text", ""))
     reply = llm.respond(prompt, channel)
     say(f"<@{user}> {reply}")
-
-
-@app.event("message")
-def on_dm(event, say):
-    # DM のみ応答
-    if event.get("channel_type") != "im":
-        return
-    channel = event.get("channel")
-    text = event.get("text", "")
-    reply = llm.respond(text, channel)
-    say(reply)
 
 
 if __name__ == "__main__":

@@ -29,7 +29,12 @@ class LLMAgent:
     ) -> None:
         self.name = name
         self.system_prompt = (
-            system_prompt or "あなたは日本語で応答する有能なアシスタントです。"
+            system_prompt
+            or (
+                "あなたは飲み会の幹事AIです。参加者から希望を引き出し、最終的に"
+                "日時と場所、お店の候補を提案してください。すべて日本語で丁寧に"
+                "応答します。"
+            )
         )
 
         main_key = os.environ.get("GEMINI_API_KEY_MAIN")
@@ -60,7 +65,7 @@ class LLMAgent:
         )
 
     def _get_chain(self, session_id: str) -> ConversationChain:
-        """チャンネル / DM ごとのチェーンを取得。"""
+        """チャンネルごとのチェーンを取得。"""
 
         if session_id not in self.chains:
             memory = ConversationSummaryBufferMemory(
