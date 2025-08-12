@@ -31,9 +31,9 @@ class LLMAgent:
         self.system_prompt = (
             system_prompt
             or (
-                "あなたは飲み会の幹事AIです。参加者から希望を引き出し、最終的に"
-                "日時と場所、お店の候補を提案してください。すべて日本語で丁寧に"
-                "応答します。"
+                "あなたは飲み会の幹事AIです。参加者から不足している情報を"
+                "最小限の質問で確認しつつ、3〜5件の候補を提示して次のアクションを"
+                "提案してください。すべて日本語で丁寧に応答します。"
             )
         )
 
@@ -45,11 +45,24 @@ class LLMAgent:
             )
 
         model_name = model or os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
+        summary_model = os.environ.get(
+            "GEMINI_MODEL_SUMMARY", "gemini-1.5-flash"
+        )
         self.main_llm = ChatGoogleGenerativeAI(
-            model=model_name, google_api_key=main_key
+            model=model_name,
+            google_api_key=main_key,
+            temperature=0.4,
+            max_output_tokens=1024,
+            timeout=20,
+            max_retries=2,
         )
         self.summary_llm = ChatGoogleGenerativeAI(
-            model=model_name, google_api_key=summary_key
+            model=summary_model,
+            google_api_key=summary_key,
+            temperature=0.2,
+            max_output_tokens=512,
+            timeout=20,
+            max_retries=2,
         )
 
         self.max_token_limit = max_token_limit
@@ -73,6 +86,7 @@ class LLMAgent:
                 max_token_limit=self.max_token_limit,
                 return_messages=True,
                 memory_key="history",
+                input_key="input",
             )
             self.chains[session_id] = ConversationChain(
                 llm=self.main_llm,

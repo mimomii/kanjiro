@@ -29,10 +29,11 @@ kanjiro/
    pip install -r requirements.txt
    ```
 3. `.env` に環境変数を設定：
-   - `SLACK_BOT_TOKEN`
-   - `SLACK_APP_TOKEN`
-   - `GEMINI_API_KEY_MAIN`
-   - `GEMINI_API_KEY_SUMMARY`
+    - `SLACK_BOT_TOKEN`
+    - `SLACK_APP_TOKEN`
+    - `GEMINI_API_KEY_MAIN`
+    - `GEMINI_API_KEY_SUMMARY`
+    - `HOTPEPPER_API_KEY`
 4. 起動：
    ```bash
    python main.py
@@ -48,6 +49,11 @@ kanjiro/
 `ConversationBufferMemory` とローリング要約を組み合わせてコンテキストを
 保持する最小サンプルです。Gemini APIキーを2つ用意し、応答生成用と要約専用
 に分けています。Slack bot でも同じ仕組みを利用しています。
+
+## 🔌 Hot Pepper API キーの取得
+`HOTPEPPER_API_KEY` は [Hot Pepper グルメ API](https://webservice.recruit.co.jp/) から
+発行できます。無料の会員登録後、アプリケーションを登録して取得したキーを
+`.env` または環境変数に設定してください。
 
 ## 🔜 今後の予定
 - [ ] Slackメッセージの分類 → 担当エージェント自動割当
