@@ -1,4 +1,6 @@
-"""Slack でメンションとDMにだけ応答する最小構成。"""
+"""Slack でメンションとDMにだけ応答する最小構成。
+
+チャンネルごとに会話コンテキストを保持する。"""
 
 import os
 import sys
@@ -10,7 +12,12 @@ from app.agent.llm_agent import LLMAgent
 
 load_dotenv()
 
-REQUIRED_ENV = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "GEMINI_API_KEY"]
+REQUIRED_ENV = [
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "GEMINI_API_KEY_MAIN",
+    "GEMINI_API_KEY_SUMMARY",
+]
 missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
 if missing:
     sys.stderr.write(f"[ERROR] Missing environment variables: {', '.join(missing)}\n")
@@ -33,8 +40,9 @@ def _strip_mention(text: str) -> str:
 @app.event("app_mention")
 def on_mention(event, say):
     user = event.get("user")
+    channel = event.get("channel")
     prompt = _strip_mention(event.get("text", ""))
-    reply = llm.respond(prompt)
+    reply = llm.respond(prompt, channel)
     say(f"<@{user}> {reply}")
 
 
@@ -43,8 +51,9 @@ def on_dm(event, say):
     # DM のみ応答
     if event.get("channel_type") != "im":
         return
+    channel = event.get("channel")
     text = event.get("text", "")
-    reply = llm.respond(text)
+    reply = llm.respond(text, channel)
     say(reply)
 
 
