@@ -29,7 +29,7 @@ class LLMAgent:
     ) -> None:
         self.name = name
         self.system_prompt = (
-            system_prompt or "あなたは日本語で応答する有能なアシスタントです。"
+            system_prompt or "あなたは飲み会の幹事AIです。参加者の希望を整理し、日時/場所/店を丁寧に提案します。"
         )
 
         main_key = os.environ.get("GEMINI_API_KEY_MAIN")
