@@ -39,7 +39,7 @@ class LLMAgent:
                 "GEMINI_API_KEY_MAIN and GEMINI_API_KEY_SUMMARY must be set"
             )
 
-        model_name = model or os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
+        model_name = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
         self.main_llm = ChatGoogleGenerativeAI(
             model=model_name, google_api_key=main_key
         )
