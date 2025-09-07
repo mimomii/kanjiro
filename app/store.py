@@ -51,3 +51,14 @@ def list_participants(thread_ts: str) -> List[Dict[str, Any]]:
 
 def record_vote(thread_ts: str, user_id: str, idx: int) -> None:
     votes[(thread_ts, user_id)] = idx
+
+def get_latest_plan_thread(channel_id: str) -> Optional[str]:
+    """
+    同一チャンネルで最後に create_plan された thread_ts を返す。
+    （インメモリなので “後勝ち” で最新扱い）
+    """
+    latest = None
+    for ts, p in plans.items():
+        if p.get("channel_id") == channel_id:
+            latest = ts
+    return latest

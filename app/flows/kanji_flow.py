@@ -4,7 +4,9 @@ import json
 from typing import Dict, List
 from slack_bolt import App
 
-from app.store import create_plan, upsert_participant, list_participants, record_vote
+from app.store import (
+    create_plan, upsert_participant, list_participants, record_vote, get_latest_plan_thread
+)
 from app.services.shops import search_shops_api
 
 
@@ -205,10 +207,19 @@ def register_kanji_flow(app: App) -> None:
 
     # 提案作成
     @app.command("/幹事提案")
-    def proposals(ack, body, say):
+    def proposals(ack, body, say, logger):
         ack()
-        res = say(text="集計中…")
-        thread_ts = res["ts"]
+        # 1) スレッド内で実行されたら、そのスレッドの ts を使う
+        thread_ts = body.get("thread_ts")
+        channel_id = body.get("channel_id")
+        if not thread_ts and channel_id:
+            # 2) スレッド外で実行されたら、同チャンネルの“最新の企画スレッド”を推定
+            thread_ts = get_latest_plan_thread(channel_id)
+        if not thread_ts:
+            say(text="企画スレッドが見つかりません。`/幹事開始` を打ったスレッド内で `/幹事提案` を実行してください。")
+            return
+        # 以降は企画スレッドに返信する
+        say(text="集計中…", thread_ts=thread_ts)
 
         rows = list_participants(thread_ts)
         if not rows:
