@@ -1,53 +1,62 @@
-# app/store.py
-from __future__ import annotations
-from typing import Dict, List, Optional, Any
+# app/services/shops.py
+import os
+import requests
+from typing import Dict, List, Optional
 
-# 1スレッド＝1企画
-# plans[thread_ts] = {"channel_id": "...", "title": Optional[str], "status": "attendance" | "dates" | "prefs" | "confirm" | "done"}
-plans: Dict[str, Dict[str, Any]] = {}
-
-# participants[(thread_ts, user_id)] = {
-#   "attendance": "yes"|"no"|"maybe",
-#   "dates": List[str],
-#   "area": str,
-#   "budget_min": int,
-#   "budget_max": int,
-#   "cuisine": str,  # comma-separated
-# }
-participants: Dict[tuple, Dict[str, Any]] = {}
-
-# votes[(thread_ts, user_id)] = proposal_index (1..3)
-votes: Dict[tuple, int] = {}
+HP_API = "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
+HP_KEY = os.environ.get("HOTPEPPER_API_KEY")
 
 
-def create_plan(thread_ts: str, channel_id: str, title: Optional[str] = None) -> None:
-    if thread_ts not in plans:
-        plans[thread_ts] = {
-            "channel_id": channel_id,
-            "title": title,
-            "status": "attendance",
-        }
+def search_shops_api(
+    area: Optional[str],
+    budget_min: Optional[int],
+    budget_max: Optional[int],
+    cuisine: Optional[str],
+    size: int = 5,
+) -> List[Dict]:
+    """
+    ざっくり検索。area/cuisine を keyword にまとめてANDっぽく検索。
+    予算はHotPepper特有のコードがあるが、簡易化のためkeywordで代替。
+    """
+    keywords = []
+    if area:
+        keywords.append(area)
+    if cuisine:
+        keywords.append(cuisine.replace(",", " "))
+    if budget_min and budget_max:
+        keywords.append(f"{budget_min}-{budget_max}")
 
+    if not HP_KEY:
+        # ダミー（APIキー未設定時）
+        return [
+            {"name": "サンプル居酒屋A", "url": "https://example.com/a", "budget_label": "¥3000〜¥4000"},
+            {"name": "サンプル焼き鳥B", "url": "https://example.com/b", "budget_label": "¥3500〜¥4500"},
+            {"name": "サンプル酒場C", "url": "https://example.com/c", "budget_label": "¥2500〜¥3500"},
+        ][:size]
 
-def update_plan_status(thread_ts: str, status: str) -> None:
-    if thread_ts in plans:
-        plans[thread_ts]["status"] = status
-
-
-def upsert_participant(thread_ts: str, user_id: str, fields: Dict[str, Any]) -> None:
-    key = (thread_ts, user_id)
-    row = participants.get(key, {"dates": []})
-    row.update(fields or {})
-    # dates を文字列→配列統一
-    if isinstance(row.get("dates"), str):
-        # カンマ区切り等が来た場合の緩い吸収
-        row["dates"] = [d.strip() for d in row["dates"].split(",") if d.strip()]
-    participants[key] = row
-
-
-def list_participants(thread_ts: str) -> List[Dict[str, Any]]:
-    return [v for (t, _), v in participants.items() if t == thread_ts]
-
-
-def record_vote(thread_ts: str, user_id: str, idx: int) -> None:
-    votes[(thread_ts, user_id)] = idx
+    params = {
+        "key": HP_KEY,
+        "format": "json",
+        "count": size,
+        "keyword": " ".join(keywords) if keywords else "",
+    }
+    try:
+        r = requests.get(HP_API, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        shops = data.get("results", {}).get("shop", []) or []
+        out = []
+        for s in shops:
+            out.append(
+                {
+                    "name": s.get("name"),
+                    "url": s.get("urls", {}).get("pc") or s.get("coupon_urls", {}).get("pc"),
+                    "budget_label": s.get("budget", {}).get("name"),
+                }
+            )
+        return out
+    except Exception:
+        # エラー時はダミー
+        return [
+            {"name": "候補（取得失敗のためサンプル）", "url": "https://example.com", "budget_label": "-"}
+        ]
