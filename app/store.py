@@ -62,3 +62,31 @@ def get_latest_plan_thread(channel_id: str) -> Optional[str]:
         if p.get("channel_id") == channel_id:
             latest = ts
     return latest
+
+def eligible_voter_ids(thread_ts: str) -> List[str]:
+    """投票対象（参加/未定）のユーザーID一覧。"""
+    ids = []
+    for (ts, uid), row in participants.items():
+        if ts != thread_ts:
+            continue
+        if row.get("attendance") in ("yes", "maybe"):
+            ids.append(uid)
+    return ids
+
+def tally_votes(thread_ts: str) -> Dict[int, int]:
+    """proposal_index -> 票数 の辞書（1..3 をキーに集計）。"""
+    counter: Dict[int, int] = {1: 0, 2: 0, 3: 0}
+    for (ts, _uid), idx in votes.items():
+        if ts != thread_ts:
+            continue
+        if idx in counter:
+            counter[idx] += 1
+    return counter
+
+def voters_who_voted(thread_ts: str) -> List[str]:
+    """すでに投票済みのユーザーID一覧。"""
+    done = []
+    for (ts, uid), _idx in votes.items():
+        if ts == thread_ts:
+            done.append(uid)
+    return done    

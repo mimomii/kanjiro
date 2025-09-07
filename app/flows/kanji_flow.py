@@ -5,7 +5,8 @@ from typing import Dict, List
 from slack_bolt import App
 
 from app.store import (
-    create_plan, upsert_participant, list_participants, record_vote, get_latest_plan_thread
+    create_plan, upsert_participant, list_participants, record_vote,
+    get_latest_plan_thread, eligible_voter_ids, tally_votes, voters_who_voted
 )
 from app.services.shops import search_shops_api
 
@@ -78,6 +79,18 @@ def _proposal_blocks(proposals: List[Dict]) -> List[Dict]:
         ]
     return blocks
 
+def _tally_blocks(counter: Dict[int, int], eligible_total: int, voted_count: int) -> List[Dict]:
+    """現在の集計状況を表示するためのBlock Kit。"""
+    bar = lambda n: "█" * n
+    lines = [
+        f"*提案1*: {counter.get(1,0)} 票",
+        f"*提案2*: {counter.get(2,0)} 票",
+        f"*提案3*: {counter.get(3,0)} 票",
+        f"_投票済み_: {voted_count}/{eligible_total}",
+    ]
+    return [
+        {"type":"section","text":{"type":"mrkdwn","text":"\n".join(lines)}},
+    ]
 
 def register_kanji_flow(app: App) -> None:
     # 開始：参加可否
@@ -264,3 +277,46 @@ def register_kanji_flow(app: App) -> None:
             text=f"提案{idx}に投票しました！",
             thread_ts=thread_ts,
         )
+
+        # --- 自動集計＆自動確定 ---
+        eligible = eligible_voter_ids(thread_ts)
+        counter = tally_votes(thread_ts)
+        voted = voters_who_voted(thread_ts)
+
+        # 1) 集計の進捗をスレッドに共有（控えめに一言）
+        say(text=f"投票を更新: {len(voted)}/{len(eligible)}名が投票済みです。", thread_ts=thread_ts)
+
+        # 2) 全員が投票済みなら自動確定
+        if len(eligible) > 0 and set(voted) >= set(eligible):
+            # 勝者を決定（最大票。タイのときは番号が小さい案を優先）
+            winner, _ = max(counter.items(), key=lambda kv: (kv[1], -kv[0]))
+            say(
+                text=f":tada: *投票が出揃いました！最終案は 提案{winner} です。*",
+                thread_ts=thread_ts,
+            )
+
+    # ---- 追加：現在の集計を出す ----
+    @app.command("/幹事集計")
+    def cmd_tally(ack, body, say):
+        ack()
+        thread_ts = body.get("thread_ts") or get_latest_plan_thread(body.get("channel_id"))
+        if not thread_ts:
+            say(text="集計対象の企画が見つかりません。/幹事開始 のスレッド内で実行してください。")
+            return
+        eligible = eligible_voter_ids(thread_ts)
+        counter = tally_votes(thread_ts)
+        voted = voters_who_voted(thread_ts)
+        blocks = _tally_blocks(counter, eligible_total=len(eligible), voted_count=len(voted))
+        say(text="現在の投票状況です。", blocks=blocks, thread_ts=thread_ts)
+
+    # ---- 追加：手動で確定する ----
+    @app.command("/幹事確定")
+    def cmd_finalize(ack, body, say):
+        ack()
+        thread_ts = body.get("thread_ts") or get_latest_plan_thread(body.get("channel_id"))
+        if not thread_ts:
+            say(text="確定対象の企画が見つかりません。/幹事開始 のスレッド内で実行してください。")
+            return
+        counter = tally_votes(thread_ts)
+        winner, _ = max(counter.items(), key=lambda kv: (kv[1], -kv[0]))
+        say(text=f":white_check_mark: 幹事によって *提案{winner}* を最終案として確定しました。", thread_ts=thread_ts)
