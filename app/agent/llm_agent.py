@@ -9,7 +9,7 @@ Slack での会話ごとにメモリを保持するため、`ConversationBufferM
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional
+from typing import Optional
 
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationSummaryBufferMemory
@@ -48,7 +48,7 @@ class LLMAgent:
         )
 
         self.max_token_limit = max_token_limit
-        self.chains: Dict[str, ConversationChain] = {}
+        self.chain: Optional[ConversationChain] = None
 
         # 会話時に使用する共通プロンプト
         self.prompt = ChatPromptTemplate.from_messages(
@@ -59,35 +59,33 @@ class LLMAgent:
             ]
         )
 
-    def _get_chain(self, session_id: str) -> ConversationChain:
-        """チャンネル / DM ごとのチェーンを取得。"""
+    def _get_chain(self) -> ConversationChain:
+        """単一チャンネル用のチェーンを返す。"""
 
-        if session_id not in self.chains:
+        if self.chain is None:
             memory = ConversationSummaryBufferMemory(
                 llm=self.summary_llm,
                 max_token_limit=self.max_token_limit,
                 return_messages=True,
                 memory_key="history",
             )
-            self.chains[session_id] = ConversationChain(
+            self.chain = ConversationChain(
                 llm=self.main_llm,
                 memory=memory,
                 prompt=self.prompt,
                 verbose=False,
             )
-        return self.chains[session_id]
+        return self.chain
 
-    def respond(self, message: str, session_id: str) -> str:
+    def respond(self, message: str) -> str:
         """入力メッセージに応答を生成する。"""
 
         if not message or not message.strip():
             return "ご用件を一言で教えてください。"
 
-        chain = self._get_chain(session_id)
         try:
-            return chain.predict(input=message.strip())
-        except Exception as e:  # pragma: no cover - best effort
-            # Slack で黙らないためのフォールバック
+            return self._get_chain().predict(input=message.strip())
+        except Exception as e:
             return (
                 "エラーが発生しました。少し時間をおいて再試行してください。"
                 f"（詳細: {type(e).__name__})"

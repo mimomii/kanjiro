@@ -1,6 +1,6 @@
-"""Slack でメンションとDMにだけ応答する最小構成。
+"""Slack でメンションにだけ応答する最小構成。
 
-チャンネルごとに会話コンテキストを保持する。"""
+単一チャンネルの会話コンテキストを保持する。"""
 
 import os
 import sys
@@ -40,21 +40,9 @@ def _strip_mention(text: str) -> str:
 @app.event("app_mention")
 def on_mention(event, say):
     user = event.get("user")
-    channel = event.get("channel")
     prompt = _strip_mention(event.get("text", ""))
-    reply = llm.respond(prompt, channel)
+    reply = llm.respond(prompt)
     say(f"<@{user}> {reply}")
-
-
-@app.event("message")
-def on_dm(event, say):
-    # DM のみ応答
-    if event.get("channel_type") != "im":
-        return
-    channel = event.get("channel")
-    text = event.get("text", "")
-    reply = llm.respond(text, channel)
-    say(reply)
 
 
 if __name__ == "__main__":
