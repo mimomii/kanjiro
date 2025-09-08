@@ -90,3 +90,8 @@ def voters_who_voted(thread_ts: str) -> List[str]:
         if ts == thread_ts:
             done.append(uid)
     return done    
+
+def get_channel_id(thread_ts: str) -> Optional[str]:
+    """企画スレッドのチャネルIDを返す。"""
+    p = plans.get(thread_ts)
+    return p.get("channel_id") if p else None

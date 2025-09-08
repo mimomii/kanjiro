@@ -188,7 +188,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
         )
 
     @app.view("prefs_input")
-    def on_prefs(ack, body, view):
+    def on_prefs(ack, body, view, client):
         ack()
         meta = json.loads(view["private_metadata"])
         thread_ts = meta["thread_ts"]
@@ -219,7 +219,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
         if fields:
             upsert_participant(thread_ts, user_id, fields)
         # ★ 全員の入力が出そろっていたら、すり合わせ会話を自動投稿
-        _maybe_post_alignment_message(thread_ts, say, llm)
+        _maybe_post_alignment_message(thread_ts, client, llm)
 
     # 提案作成
     @app.command("/幹事提案")
@@ -358,7 +358,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
                 return False
         return True
 
-    def _maybe_post_alignment_message(thread_ts: str, say, llm: LLMAgent) -> None:
+    def _maybe_post_alignment_message(thread_ts: str, client, llm: LLMAgent) -> None:
         """全員入力が揃っていれば、すり合わせの会話を自動投稿する。"""
         if not _is_everyone_filled(thread_ts):
             return
@@ -370,4 +370,8 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
             msg = llm.respond(prompt)
         except Exception:
             msg = "みなさんの入力が出そろいました。第2候補日や近隣エリア、近いジャンルを出し合ってすり合わせましょう！"
-        say(text=msg, thread_ts=thread_ts)
+        # チャンネルIDを取得してスレッドに投稿
+        from app.store import get_channel_id
+        channel_id = get_channel_id(thread_ts)
+        if channel_id:
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=msg)
