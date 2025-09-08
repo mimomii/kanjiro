@@ -111,3 +111,24 @@ class LLMAgent:
                 f"（詳細: {type(e).__name__})"
             )
 
+    def get_summary(self, max_chars: int = 600) -> str:
+        """会話の要約（あれば）を返す。無ければ直近履歴をざっくり連結。"""
+        mem = self._get_memory()
+        # LangChainの実装差異吸収
+        summary = getattr(mem, "buffer", "") or getattr(mem, "moving_summary_buffer", "")
+        if isinstance(summary, str) and summary.strip():
+            return summary[:max_chars]
+        try:
+            vars = mem.load_memory_variables({})
+            history = vars.get("history", [])
+            if isinstance(history, list):
+                lines = []
+                for m in history[-10:]:
+                    role = getattr(m, "type", None) or getattr(m, "role", None) or "msg"
+                    content = getattr(m, "content", "") or ""
+                    if content:
+                        lines.append(f"{role}: {content}")
+                return "\n".join(lines)[:max_chars] if lines else ""
+        except Exception:
+            pass
+        return ""

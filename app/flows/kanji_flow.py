@@ -147,8 +147,8 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
             )
 
     # 日付モーダル保存 → 希望モーダルへ
-    @app.view("prefs_input")
-    def on_prefs(ack, body, view, say, client):
+    @app.view("pick_dates")
+    def on_pick_dates(ack, body, view, say, client):
         ack()
         meta = json.loads(view["private_metadata"])
         thread_ts = meta["thread_ts"]
