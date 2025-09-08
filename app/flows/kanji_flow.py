@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Dict, List
 from slack_bolt import App
+from app.agent.llm_agent import LLMAgent
 
 from app.store import (
     create_plan, upsert_participant, list_participants, record_vote,
@@ -92,7 +93,7 @@ def _tally_blocks(counter: Dict[int, int], eligible_total: int, voted_count: int
         {"type":"section","text":{"type":"mrkdwn","text":"\n".join(lines)}},
     ]
 
-def register_kanji_flow(app: App) -> None:
+def register_kanji_flow(app: App, llm: LLMAgent) -> None:
     # 開始：参加可否
     @app.command("/幹事開始")
     def start(ack, body, say):
@@ -146,8 +147,8 @@ def register_kanji_flow(app: App) -> None:
             )
 
     # 日付モーダル保存 → 希望モーダルへ
-    @app.view("pick_dates")
-    def on_dates(ack, body, view, client):
+    @app.view("prefs_input")
+    def on_prefs(ack, body, view, say, client):
         ack()
         meta = json.loads(view["private_metadata"])
         thread_ts = meta["thread_ts"]
@@ -217,6 +218,8 @@ def register_kanji_flow(app: App) -> None:
 
         if fields:
             upsert_participant(thread_ts, user_id, fields)
+        # ★ 全員の入力が出そろっていたら、すり合わせ会話を自動投稿
+        _maybe_post_alignment_message(thread_ts, say, llm)
 
     # 提案作成
     @app.command("/幹事提案")
@@ -247,6 +250,8 @@ def register_kanji_flow(app: App) -> None:
             top_dates = [str(today + timedelta(days=i * 7)) for i in range(3)]
 
         proposals = []
+        # ★ 通常の会話も含む“会話要約”を検索ヒントに
+        convo_summary = llm.get_summary()
         for d in top_dates:
             shops = search_shops_api(
                 area=agg["area"],
@@ -254,6 +259,7 @@ def register_kanji_flow(app: App) -> None:
                 budget_max=agg["budget"][1],
                 cuisine=", ".join(agg["cuisine"]) if agg["cuisine"] else None,
                 size=5,
+                extra_keywords=convo_summary,  # 会話要約をヒントとして渡す
             )
             proposals.append(
                 {"date": d, "area": agg["area"], "budget": agg["budget"], "cuisine": agg["cuisine"], "shops": shops}
@@ -320,3 +326,48 @@ def register_kanji_flow(app: App) -> None:
         counter = tally_votes(thread_ts)
         winner, _ = max(counter.items(), key=lambda kv: (kv[1], -kv[0]))
         say(text=f":white_check_mark: 幹事によって *提案{winner}* を最終案として確定しました。", thread_ts=thread_ts)
+    
+    # ===== ここから追加：すり合わせ投稿のためのヘルパ =====
+    def _alignment_prompt(agg: Dict, rows: List[Dict], summary: str) -> str:
+        """すり合わせ誘導文を LLM に生成させるためのプロンプト。"""
+        needers = [r for r in rows if r.get("attendance") in ("yes","maybe")]
+        sample = {
+            "top_dates_hint": list(agg["date_counts"].keys()),
+            "area_mode": agg["area"],
+            "budget": agg["budget"],
+            "cuisine_top": agg["cuisine"],
+            "participants_count": len(needers),
+        }
+        return (
+            "次の情報を踏まえて、Slackスレッド向けの“すり合わせ”誘導メッセージを日本語で作成してください。\n"
+            "- 目的: メンバー間で日程・エリア・ジャンルの希望をすり合わせる\n"
+            "- 形式: 箇条書き3〜5行 + 短い締めの一言。@here は付けない\n"
+            f"- 集計サマリの要点: {sample}\n"
+            f"- 最近の会話要約: {summary[:400]}\n"
+            "注意: 強制はせず、相違点がある場合は第2候補日・隣接エリア・類似ジャンルなど“落とし所”をやさしく提案してください。"
+        )
+
+    def _is_everyone_filled(thread_ts: str) -> bool:
+        rows = list_participants(thread_ts)
+        needers = [r for r in rows if r.get("attendance") in ("yes","maybe")]
+        if not needers:
+            return False
+        for r in needers:
+            # “入力済み”の最低条件：日付が1つ以上（希望は任意）
+            if not (r.get("dates") and len(r.get("dates")) > 0):
+                return False
+        return True
+
+    def _maybe_post_alignment_message(thread_ts: str, say, llm: LLMAgent) -> None:
+        """全員入力が揃っていれば、すり合わせの会話を自動投稿する。"""
+        if not _is_everyone_filled(thread_ts):
+            return
+        rows = list_participants(thread_ts)
+        agg = _participants_summary(rows)
+        summary = llm.get_summary()
+        prompt = _alignment_prompt(agg, rows, summary)
+        try:
+            msg = llm.respond(prompt)
+        except Exception:
+            msg = "みなさんの入力が出そろいました。第2候補日や近隣エリア、近いジャンルを出し合ってすり合わせましょう！"
+        say(text=msg, thread_ts=thread_ts)

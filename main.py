@@ -68,8 +68,8 @@ if __name__ == "__main__":
     except Exception as e:
         sys.stderr.write(f"[WARN] auth_test failed: {e}\n")
 
-    # 幹事フロー（/幹事開始, /幹事提案, 投票 等）
-    register_kanji_flow(app)
+    # 幹事フロー（/幹事開始, /幹事提案, 投票 等）※ LLM を渡す
+    register_kanji_flow(app, llm)
 
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
     handler.start()
