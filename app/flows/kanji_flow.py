@@ -146,10 +146,8 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
                 },
             )
 
-    # 日付モーダル保存 → 希望モーダルへ
     @app.view("pick_dates")
-    def on_pick_dates(ack, body, view, client):
-        ack()
+    def on_pick_dates(ack, body, view, client):  # ← say は不要
         meta = json.loads(view["private_metadata"])
         thread_ts = meta["thread_ts"]
         user_id = body["user"]["id"]
@@ -165,27 +163,25 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
         if dates:
             upsert_participant(thread_ts, user_id, {"dates": dates})
 
-        client.views_open(
-            trigger_id=body["trigger_id"],
-            view={
-                "type": "modal",
-                "callback_id": "prefs_input",
-                "private_metadata": json.dumps({"thread_ts": thread_ts}),
-                "title": {"type": "plain_text", "text": "希望を入力"},
-                "submit": {"type": "plain_text", "text": "保存"},
-                "blocks": [
-                    {"type": "input", "block_id": "area", "optional": True,
-                     "label": {"type": "plain_text", "text": "エリア（例：新宿/渋谷など）"},
-                     "element": {"type": "plain_text_input", "action_id": "val"}},
-                    {"type": "input", "block_id": "budget", "optional": True,
-                     "label": {"type": "plain_text", "text": "予算（例：3000-5000）"},
-                     "element": {"type": "plain_text_input", "action_id": "val"}},
-                    {"type": "input", "block_id": "cuisine", "optional": True,
-                     "label": {"type": "plain_text", "text": "ジャンル（例：焼き鳥, 居酒屋）"},
-                     "element": {"type": "plain_text_input", "action_id": "val"}},
-                ],
-            },
-        )
+        # ★ モーダル送信に対する応答は views_open ではなく push / update
+        ack(response_action="push", view={
+            "type": "modal",
+            "callback_id": "prefs_input",
+            "private_metadata": json.dumps({"thread_ts": thread_ts}),
+            "title": {"type": "plain_text", "text": "希望を入力"},
+            "submit": {"type": "plain_text", "text": "保存"},
+            "blocks": [
+                {"type": "input", "block_id": "area", "optional": True,
+                "label": {"type": "plain_text", "text": "エリア（例：新宿/渋谷など）"},
+                "element": {"type": "plain_text_input", "action_id": "val"}},
+                {"type": "input", "block_id": "budget", "optional": True,
+                "label": {"type": "plain_text", "text": "予算（例：3000-5000）"},
+                "element": {"type": "plain_text_input", "action_id": "val"}},
+                {"type": "input", "block_id": "cuisine", "optional": True,
+                "label": {"type": "plain_text", "text": "ジャンル（例：焼き鳥, 居酒屋）"},
+                "element": {"type": "plain_text_input", "action_id": "val"}},
+            ],
+        })
 
     @app.view("prefs_input")
     def on_prefs(ack, body, view, client):
