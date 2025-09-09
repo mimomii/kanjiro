@@ -148,7 +148,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
 
     # 日付モーダル保存 → 希望モーダルへ
     @app.view("pick_dates")
-    def on_pick_dates(ack, body, view, say, client):
+    def on_pick_dates(ack, body, view, client):
         ack()
         meta = json.loads(view["private_metadata"])
         thread_ts = meta["thread_ts"]
@@ -190,36 +190,41 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
     @app.view("prefs_input")
     def on_prefs(ack, body, view, client):
         ack()
-        meta = json.loads(view["private_metadata"])
-        thread_ts = meta["thread_ts"]
-        user_id = body["user"]["id"]
+        try:
+            meta = json.loads(view["private_metadata"])
+            thread_ts = meta["thread_ts"]
+            user_id = body["user"]["id"]
 
-        vals = view["state"]["values"]
-        area = vals.get("area", {}).get("val", {}).get("value")
-        budget_raw = vals.get("budget", {}).get("val", {}).get("value")
-        cuisine = vals.get("cuisine", {}).get("val", {}).get("value")
+            vals = view["state"]["values"]
+            area = vals.get("area", {}).get("val", {}).get("value")
+            budget_raw = vals.get("budget", {}).get("val", {}).get("value")
+            cuisine = vals.get("cuisine", {}).get("val", {}).get("value")
 
-        budget_min = budget_max = None
-        if budget_raw and "-" in budget_raw:
-            try:
-                bmin, bmax = budget_raw.split("-", 1)
-                budget_min, budget_max = int(bmin), int(bmax)
-            except Exception:
-                pass
+            budget_min = budget_max = None
+            if budget_raw and "-" in budget_raw:
+                try:
+                    bmin, bmax = budget_raw.split("-", 1)
+                    budget_min, budget_max = int(bmin), int(bmax)
+                except Exception:
+                    pass
 
-        fields = {}
-        if area:
-            fields["area"] = area.strip()
-        if budget_min is not None and budget_max is not None:
-            fields["budget_min"] = budget_min
-            fields["budget_max"] = budget_max
-        if cuisine:
-            fields["cuisine"] = cuisine.strip()
+            fields = {}
+            if area:
+                fields["area"] = area.strip()
+            if budget_min is not None and budget_max is not None:
+                fields["budget_min"] = budget_min
+                fields["budget_max"] = budget_max
+            if cuisine:
+                fields["cuisine"] = cuisine.strip()
 
-        if fields:
-            upsert_participant(thread_ts, user_id, fields)
-        # ★ 全員の入力が出そろっていたら、すり合わせ会話を自動投稿
-        _maybe_post_alignment_message(thread_ts, client, llm)
+            if fields:
+                upsert_participant(thread_ts, user_id, fields)
+
+            _maybe_post_alignment_message(thread_ts, client, llm)
+        except Exception as e:
+            # view_submissionはack済みなので落とさない。必要ならログ出力だけ。
+            # logger 使えるなら logger.exception(...) を推奨
+            print(f"[WARN] prefs_input failed: {type(e).__name__}: {e}")
 
     # 提案作成
     @app.command("/幹事提案")
