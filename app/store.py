@@ -1,4 +1,3 @@
-# app/store.py
 from __future__ import annotations
 from typing import Dict, List, Optional, Any
 
@@ -7,7 +6,6 @@ from typing import Dict, List, Optional, Any
 #   "channel_id": "...",
 #   "title": Optional[str],
 #   "status": "attendance" | "dates" | "prefs" | "confirm" | "done",
-#   "alignment_posted": bool,  # すり合わせ投稿済みフラグ
 # }
 plans: Dict[str, Dict[str, Any]] = {}
 
@@ -31,7 +29,6 @@ def create_plan(thread_ts: str, channel_id: str, title: Optional[str] = None) ->
             "channel_id": channel_id,
             "title": title,
             "status": "attendance",
-            "alignment_posted": False,
         }
 
 
@@ -59,6 +56,10 @@ def record_vote(thread_ts: str, user_id: str, idx: int) -> None:
 
 
 def get_latest_plan_thread(channel_id: str) -> Optional[str]:
+    """
+    同一チャンネルで最後に create_plan された thread_ts を返す。
+    （インメモリなので “後勝ち” で最新扱い）
+    """
     latest = None
     for ts, p in plans.items():
         if p.get("channel_id") == channel_id:
@@ -101,13 +102,3 @@ def get_channel_id(thread_ts: str) -> Optional[str]:
     """企画スレッドのチャネルIDを返す。"""
     p = plans.get(thread_ts)
     return p.get("channel_id") if p else None
-
-
-def get_alignment_posted(thread_ts: str) -> bool:
-    p = plans.get(thread_ts) or {}
-    return bool(p.get("alignment_posted"))
-
-
-def set_alignment_posted(thread_ts: str, posted: bool = True) -> None:
-    if thread_ts in plans:
-        plans[thread_ts]["alignment_posted"] = posted

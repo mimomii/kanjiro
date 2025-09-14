@@ -66,7 +66,8 @@ if __name__ == "__main__":
     except Exception as e:
         sys.stderr.write(f"[WARN] auth_test failed: {e}\n")
 
-    register_kanji_flow(app, llm, BOT_USER_ID)
+    # bot_user_id を渡す必要は無くなりました
+    register_kanji_flow(app, llm)
 
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
     handler.start()

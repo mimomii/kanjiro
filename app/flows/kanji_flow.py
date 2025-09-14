@@ -8,7 +8,7 @@ from app.agent.llm_agent import LLMAgent
 from app.store import (
     create_plan, upsert_participant, list_participants, record_vote,
     get_latest_plan_thread, eligible_voter_ids, tally_votes, voters_who_voted,
-    get_channel_id, get_alignment_posted, set_alignment_posted,
+    get_channel_id,
 )
 from app.services.shops import search_shops_api
 
@@ -95,9 +95,8 @@ def _tally_blocks(counter: Dict[int, int], eligible_total: int, voted_count: int
     return [{"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}}]
 
 
-# ===== すり合わせ投稿ヘルパ =====
-
 def _alignment_prompt(agg: Dict, rows: List[Dict], summary: str) -> str:
+    """“すり合わせ”誘導文を LLM に作らせるためのプロンプト。"""
     needers = [r for r in rows if r.get("attendance") in ("yes","maybe")]
     sample = {
         "top_dates_hint": list(agg["date_counts"].keys()),
@@ -116,93 +115,9 @@ def _alignment_prompt(agg: Dict, rows: List[Dict], summary: str) -> str:
     )
 
 
-def _is_all_members_filled(thread_ts: str, client, bot_user_id: Optional[str]) -> bool:
-    """
-    チャンネルの“全メンバー”（Bot自身を除く）が回答済みか判定。
-    - 参加可否は必須
-    - yes/maybe は日付が1つ以上必須
-    """
-    channel_id = get_channel_id(thread_ts)
-    if not channel_id:
-        return False
-
-    try:
-        members: List[str] = []
-        cursor = None
-        while True:
-            res = client.conversations_members(channel=channel_id, cursor=cursor)  # type: ignore
-            members.extend(res.get("members", []))
-            cursor = res.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                break
-    except Exception:
-        return False
-
-    # Bot自身は除外
-    targets = [m for m in members if m and m != bot_user_id]
-
-    # 回答状況を確認
-    rows = list_participants(thread_ts)
-    # user_id -> row
-    by_uid = {}
-    for (t_uid_pair, row) in [((thread_ts, None), None)]:  # dummy to hint types
-        pass
-    # 再構築
-    from app.store import participants as _p  # 直接参照
-    for (ts, uid), row in _p.items():
-        if ts == thread_ts:
-            by_uid[uid] = row
-
-    if not targets:
-        return False
-
-    for uid in targets:
-        row = by_uid.get(uid)
-        if not row:
-            return False
-        att = row.get("attendance")
-        if att not in ("yes", "maybe", "no"):
-            return False
-        if att in ("yes", "maybe"):
-            dates = row.get("dates") or []
-            if not (isinstance(dates, list) and len(dates) > 0):
-                return False
-    return True
-
-
-def _maybe_post_alignment_message(thread_ts: str, client, llm: LLMAgent, bot_user_id: Optional[str]) -> None:
-    """
-    全員（Bot除く）入力が揃っていて、かつ未投稿なら
-    “すり合わせ”誘導メッセージをチャンネルに直接投稿。
-    """
-    if get_alignment_posted(thread_ts):
-        return
-    if not _is_all_members_filled(thread_ts, client, bot_user_id):
-        return
-
-    rows = list_participants(thread_ts)
-    agg = _participants_summary(rows)
-    summary = llm.get_summary()
-    prompt = _alignment_prompt(agg, rows, summary)
-    channel_id = get_channel_id(thread_ts)
-    if not channel_id:
-        return
-
-    try:
-        msg = llm.respond(prompt)
-    except Exception:
-        msg = "みなさんの入力が出そろいました。第2候補日や近隣エリア、近いジャンルを出し合ってすり合わせましょう！"
-
-    try:
-        client.chat_postMessage(channel=channel_id, text=msg)  # チャンネルに直接
-        set_alignment_posted(thread_ts, True)
-    except Exception:
-        pass
-
-
 # ===== メイン登録 =====
 
-def register_kanji_flow(app: App, llm: LLMAgent, bot_user_id: Optional[str]) -> None:
+def register_kanji_flow(app: App, llm: LLMAgent) -> None:
     # /幹事説明：定型の利用ガイド
     @app.command("/幹事説明")
     def cmd_help(ack, body, say):
@@ -211,13 +126,79 @@ def register_kanji_flow(app: App, llm: LLMAgent, bot_user_id: Optional[str]) -> 
             "*幹事郎の使い方*\n"
             "1) `/幹事開始`：参加可否ボタンが出ます。参加/未定の人は候補日を入力します。\n"
             "2) 日付の次に、希望（エリア/予算/ジャンル）をモーダルで入力します。\n"
-            "3) 全員の入力が揃うと、チャンネルに“すり合わせ”の案内が自動投稿されます。\n"
+            "3) 進捗は `/幹事すり合わせ` で確認できます（サマリー＆“すり合わせ”案内をチャンネルに投稿）。\n"
             "4) `/幹事提案`：集計結果と会話要約をもとに3つの案（各案に店候補リンク）を提示します。\n"
             "5) 各案に“投票”ボタンで投票します。`/幹事集計`で途中経過を確認できます。\n"
             "6) 全員が投票すると、自動で最終案をチャンネルに宣言します（または`/幹事確定`で手動確定）。\n"
             "7) 店のリンクは安全なサイトに限定されます（食べログ/ホットペッパー/ぐるなび/一休/Retty）。\n"
         )
         say(text=guide)
+
+    # /回答状況：回答サマリー + “すり合わせ”案内を投稿
+    @app.command("/幹事すり合わせ")
+    def cmd_status(ack, body, say, client, logger):
+        ack()
+        thread_ts = body.get("thread_ts") or get_latest_plan_thread(body.get("channel_id"))
+        ch = body.get("channel_id")
+        if not thread_ts or not ch:
+            say(text="企画スレッドが見つかりません。/幹事開始 のスレッド内で実行するか、同チャンネルで一度 /幹事開始 を打ってください。")
+            return
+
+        try:
+            rows = list_participants(thread_ts)
+            if not rows:
+                say(text="まだ回答がありません。/幹事開始 で募集を始めてください。")
+                return
+
+            # 集計
+            agg = _participants_summary(rows)
+            date_lines = [f"- {d}: {c}名" for d, c in agg["date_counts"].most_common(5)]
+            area = agg["area"] or "-"
+            budget = f"¥{agg['budget'][0]}〜¥{agg['budget'][1]}"
+            cuisine = ", ".join(agg["cuisine"]) if agg["cuisine"] else "-"
+
+            total = len(rows)
+            yes_cnt  = sum(1 for r in rows if r.get("attendance") == "yes")
+            maybe_cnt = sum(1 for r in rows if r.get("attendance") == "maybe")
+            no_cnt   = sum(1 for r in rows if r.get("attendance") == "no")
+            filled_cnt = sum(
+                1 for r in rows
+                if (r.get("attendance") in ("yes","maybe") and (r.get("dates") or []))
+                   or (r.get("attendance") == "no")
+            )
+
+            # すり合わせ案内（LLM）
+            try:
+                convo_summary = llm.get_summary()
+                prompt = _alignment_prompt(agg, rows, convo_summary)
+                align_msg = llm.respond(prompt)
+            except Exception:
+                align_msg = "入力が出そろってきました。第2候補日や近隣エリア、近いジャンルを出し合ってすり合わせましょう！"
+
+            # 投稿（チャンネルに直接）
+            blocks = [
+                {"type": "header", "text": {"type": "plain_text", "text": "回答状況まとめ"}},
+                {"type": "section", "text": {"type": "mrkdwn",
+                    "text": (
+                        f"*回答数*: {filled_cnt}/{total}\n"
+                        f"*参加*: {yes_cnt}  *未定*: {maybe_cnt}  *不参加*: {no_cnt}\n"
+                        f"*エリア傾向*: {area}\n"
+                        f"*予算中央値*: {budget}\n"
+                        f"*ジャンルトップ*: {cuisine}\n"
+                    )
+                }},
+                {"type": "section", "text": {"type": "mrkdwn",
+                    "text": "*候補日（上位）:*\n" + ("\n".join(date_lines) if date_lines else "-")}
+                },
+                {"type": "divider"},
+                {"type": "section", "text": {"type": "mrkdwn",
+                    "text": f":speech_balloon: *すり合わせの案内*\n{align_msg}"}}
+            ]
+            client.chat_postMessage(channel=ch, text="回答状況まとめ", blocks=blocks)
+
+        except Exception as e:
+            logger.exception(e)
+            say(text="回答状況の集計でエラーが発生しました。もう一度お試しください。")
 
     # 開始：参加可否
     @app.command("/幹事開始")
@@ -361,8 +342,7 @@ def register_kanji_flow(app: App, llm: LLMAgent, bot_user_id: Optional[str]) -> 
                 "cuisine": cuisine,
             })
 
-            # 全員揃っていれば、すり合わせの投稿をチャンネルへ（1回だけ）
-            _maybe_post_alignment_message(thread_ts, client, llm, bot_user_id)
+            # 自動投稿は完全廃止（ここでは何もしない）
 
             # 本人に控えめに通知（チャンネルにエフェメラル）
             ch = get_channel_id(thread_ts)
@@ -442,7 +422,7 @@ def register_kanji_flow(app: App, llm: LLMAgent, bot_user_id: Optional[str]) -> 
         counter = tally_votes(thread_ts)
         voted = voters_who_voted(thread_ts)
 
-        # 1) 集計の進捗をスレッドに共有（ここは従来通り）
+        # 1) 集計の進捗をスレッドに共有（従来通り）
         say(text=f"投票を更新: {len(voted)}/{len(eligible)}名が投票済みです。", thread_ts=thread_ts)
 
         # 2) 全員が投票済みなら自動確定 → チャンネルに直接告知

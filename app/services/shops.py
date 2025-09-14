@@ -40,10 +40,7 @@ def _extract_json(text: str) -> List[Dict]:
     try:
         # ```json ... ``` にも対応
         if "```" in text:
-            # 最後のコードブロックを優先
             chunks = text.split("```")
-            # json指定が無いケースでも最後のブロックを拾う
-            # 例: ... ```json [ ... ] ```
             text = chunks[-2] if len(chunks) >= 2 else text
         data = json.loads(text)
         if isinstance(data, list):
@@ -66,7 +63,6 @@ def _domain_of(url: str) -> str:
     try:
         from urllib.parse import urlparse
         netloc = urlparse(url).netloc.lower()
-        # サブドメインを削って主要ドメインを返す
         parts = netloc.split(".")
         if len(parts) >= 2:
             return ".".join(parts[-2:])
@@ -93,9 +89,6 @@ def _sanitize_and_fill(items: List[Dict], size: int, fallback_query: str) -> Lis
 
         dom = _domain_of(url) if url else ""
         if not url or dom not in PREF_DOMAINS:
-            # モデルが不明/別ドメインURLを返した場合は安全URLに置換
-            # 1) 可能なら name から想起されるドメインをあてる（軽いヒューリスティック）
-            # 2) ダメなら順にローテーション
             preferred = None
             lower = name.lower()
             if "食べログ" in name or "tabelog" in lower:
@@ -110,9 +103,7 @@ def _sanitize_and_fill(items: List[Dict], size: int, fallback_query: str) -> Lis
                 preferred = "retty.me"
 
             if not preferred:
-                # 適当な既知ドメインを回す
                 preferred = list(SAFE_DOMAIN_HOMEPAGES.keys())[len(out) % len(SAFE_DOMAIN_HOMEPAGES)]
-            # 検索語をURLエンコードして（※サイト固有の検索URLは仕様変化が多いため、安全にトップへ）
             url = SAFE_DOMAIN_HOMEPAGES.get(preferred, "https://tabelog.com/")
 
         if url in seen_urls:
@@ -123,7 +114,6 @@ def _sanitize_and_fill(items: List[Dict], size: int, fallback_query: str) -> Lis
         if len(out) >= size:
             break
 
-    # 件数足りない場合は安全URLで埋める（UIが空にならないように）
     i = 0
     while len(out) < size:
         dom = list(SAFE_DOMAIN_HOMEPAGES.keys())[i % len(SAFE_DOMAIN_HOMEPAGES)]
@@ -158,12 +148,10 @@ def search_shops_api(
         model=model,
         google_api_key=api_key,
         temperature=float(os.environ.get("GEMINI_TEMPERATURE_SEARCH", "0.2")),
-        # ★ ツール指定を削除（純生成）
     )
 
     q = _mk_query(area, cuisine, budget_min, budget_max, extra_keywords)
 
-    # 生成だけで完結させるため、厳密な出力制約を付与
     system = (
         "あなたはグルメ店候補を要件に沿って提案するアシスタントです。"
         "以下の制約で JSON 配列のみを返してください（前後の説明文は一切不要）。\n"
@@ -184,10 +172,6 @@ def search_shops_api(
         resp = llm.invoke([("system", system), ("human", user)])
         text = resp.content if hasattr(resp, "content") else str(resp)
         items = _extract_json(text)
-
-        # 正規化＆既知ドメイン以外を弾きつつ補正
         return _sanitize_and_fill(items, size=size, fallback_query=q)
-
     except Exception:
-        # 完全失敗時のフォールバック（安全URLで埋める）
         return _sanitize_and_fill([], size=size, fallback_query=q)

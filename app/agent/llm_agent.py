@@ -78,7 +78,6 @@ class LLMAgent:
             )
         return self.chain
 
-
     def _get_memory(self) -> ConversationSummaryBufferMemory:
         """内部メモリへのアクセス（未初期化なら初期化）。"""
         if self._memory is None:
