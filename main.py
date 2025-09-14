@@ -8,8 +8,8 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from app.agent.llm_agent import LLMAgent
-from app.flows.kanji_flow import register_kanji_flow  # インメモリ版
+from app.agent.llmajent import LLMAgent  # ← 既存どおり
+from app.flows.kanji_flow import register_kanji_flow  # ← 変更後: 第3引数 bot_user_id を渡す
 
 load_dotenv()
 
@@ -68,8 +68,8 @@ if __name__ == "__main__":
     except Exception as e:
         sys.stderr.write(f"[WARN] auth_test failed: {e}\n")
 
-    # 幹事フロー（/幹事開始, /幹事提案, 投票 等）※ LLM を渡す
-    register_kanji_flow(app, llm)
+    # 幹事フローを登録（Bot ID を渡す）
+    register_kanji_flow(app, llm, BOT_USER_ID)
 
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
     handler.start()
