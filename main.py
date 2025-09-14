@@ -1,15 +1,14 @@
 """Slack最小構成 + 受動インジェスト + 幹事フロー登録（参加可否→日付→希望→提案）
 ※ インメモリ版（再起動で消えます）
 """
-
 import os
 import sys
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from app.agent.llmajent import LLMAgent  # ← 既存どおり
-from app.flows.kanji_flow import register_kanji_flow  # ← 変更後: 第3引数 bot_user_id を渡す
+from app.agent.llm_agent import LLMAgent
+from app.flows.kanji_flow import register_kanji_flow
 
 load_dotenv()
 
@@ -25,7 +24,7 @@ if missing:
     sys.exit(1)
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
-llm = LLMAgent()  # 日本語で答えるデフォルト設定
+llm = LLMAgent()
 BOT_USER_ID = None  # 起動時に auth.test で解決
 
 
@@ -61,14 +60,12 @@ def on_message(event, logger):
 
 
 if __name__ == "__main__":
-    # BotユーザーID
     try:
         auth = app.client.auth_test()
         BOT_USER_ID = auth["user_id"]
     except Exception as e:
         sys.stderr.write(f"[WARN] auth_test failed: {e}\n")
 
-    # 幹事フローを登録（Bot ID を渡す）
     register_kanji_flow(app, llm, BOT_USER_ID)
 
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
