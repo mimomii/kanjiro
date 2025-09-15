@@ -10,7 +10,8 @@ from app.store import (
     get_latest_plan_thread, eligible_voter_ids, tally_votes, voters_who_voted,
     get_channel_id,
 )
-from app.services.shops import search_shops_api
+# Hot Pepper公式API + 意図理解（LLM）を使う版
+from app.services.shops import find_shops
 
 
 # ===== 集計系ユーティリティ =====
@@ -54,21 +55,50 @@ def _pick_top_dates(date_counts, k=3) -> List[str]:
     return [d for d, _ in date_counts.most_common(k)]
 
 
+# ---- 1提案=1店舗 用の提案ブロック ----
 def _proposal_blocks(proposals: List[Dict]) -> List[Dict]:
+    """
+    proposals: [{"date": "YYYY-MM-DD", "area": str|None, "budget": (min,max), "cuisine": [..], "shop": {...}}]
+    shop: {name, url, budget_label, address, access, photo_url}
+    """
     blocks: List[Dict] = []
     for i, p in enumerate(proposals, start=1):
-        shops_md = "\n".join(
-            [f"- <{s['url']}|{s['name']}>（{s.get('budget_label','-')}）" for s in p["shops"]]
-        ) or "- 候補取得なし"
-        header = f"提案{i}：{p['date']} @ {p.get('area','-')}"
+        shop = p.get("shop") or {}
+        header = f"提案{i}：{p.get('date','-')} @ {p.get('area','-')}"
         budget_txt = f"¥{p['budget'][0]}〜¥{p['budget'][1]}"
-        cuisine_txt = ", ".join(p["cuisine"]) if p["cuisine"] else "-"
+        cuisine_txt = ", ".join(p["cuisine"]) if p.get("cuisine") else "-"
+        name = shop.get("name", "-")
+        url = shop.get("url", "")
+        budget_label = shop.get("budget_label") or "-"
+        address = shop.get("address") or "-"
+        access = shop.get("access") or "-"
+        photo_url = shop.get("photo_url")
+
+        meta_lines = [
+            f"*予算（希望）*: {budget_txt}",
+            f"*ジャンル（希望）*: {cuisine_txt}",
+        ]
+        shop_lines = [
+            f"*店名*: <{url}|{name}>" if url else f"*店名*: {name}",
+            f"*店予算目安*: {budget_label}",
+            f"*住所*: {address}",
+            f"*アクセス*: {access}",
+        ]
+
         blocks += [
             {"type": "header", "text": {"type": "plain_text", "text": header}},
-            {
+            {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(meta_lines)}},
+        ]
+        if photo_url:
+            blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*予算*: {budget_txt}\n*ジャンル*: {cuisine_txt}\n{shops_md}"},
-            },
+                "text": {"type": "mrkdwn", "text": "\n".join(shop_lines)},
+                "accessory": {"type": "image", "image_url": photo_url, "alt_text": name}
+            })
+        else:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(shop_lines)}})
+
+        blocks += [
             {
                 "type": "actions",
                 "elements": [
@@ -127,14 +157,14 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
             "1) `/幹事開始`：参加可否ボタンが出ます。参加/未定の人は候補日を入力します。\n"
             "2) 日付の次に、希望（エリア/予算/ジャンル）をモーダルで入力します。\n"
             "3) 進捗は `/幹事すり合わせ` で確認できます（サマリー＆“すり合わせ”案内をチャンネルに投稿）。\n"
-            "4) `/幹事提案`：集計結果と会話要約をもとに3つの案（各案に店候補リンク）を提示します。\n"
+            "4) `/幹事提案`：公式APIの結果と会話要約をもとに *1提案=1店舗* で3案を提示します。\n"
             "5) 各案に“投票”ボタンで投票します。`/幹事集計`で途中経過を確認できます。\n"
             "6) 全員が投票すると、自動で最終案をチャンネルに宣言します（または`/幹事確定`で手動確定）。\n"
-            "7) 店のリンクは安全なサイトに限定されます（食べログ/ホットペッパー/ぐるなび/一休/Retty）。\n"
+            "7) 店の検索は Hot Pepper 公式APIを使用し、ジャンル/予算/個室/禁煙/カード/子連れ/飲み放題等でフィルタします。\n"
         )
         say(text=guide)
 
-    # /回答状況：回答サマリー + “すり合わせ”案内を投稿
+    # /幹事すり合わせ：回答サマリー + “すり合わせ”案内を投稿
     @app.command("/幹事すり合わせ")
     def cmd_status(ack, body, say, client, logger):
         ack()
@@ -342,8 +372,6 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
                 "cuisine": cuisine,
             })
 
-            # 自動投稿は完全廃止（ここでは何もしない）
-
             # 本人に控えめに通知（チャンネルにエフェメラル）
             ch = get_channel_id(thread_ts)
             if ch:
@@ -356,7 +384,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
         except Exception as e:
             logger.exception(e)
 
-    # 提案作成
+    # 提案作成（Hot Pepper公式API + 1提案=1店舗）
     @app.command("/幹事提案")
     def proposals(ack, body, say, logger, client):
         ack()
@@ -367,7 +395,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
         if not thread_ts:
             say(text="企画スレッドが見つかりません。`/幹事開始` を打ったスレッド内で `/幹事提案` を実行してください。")
             return
-        say(text="集計中…", thread_ts=thread_ts)
+        say(text="公式APIで候補検索中…", thread_ts=thread_ts)
 
         rows = list_participants(thread_ts)
         if not rows:
@@ -381,22 +409,46 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
             today = date.today()
             top_dates = [str(today + timedelta(days=i * 7)) for i in range(3)]
 
-        proposals = []
+        # 会話要約を意図理解に使い、Hot Pepper API検索
         convo_summary = llm.get_summary()
-        for d in top_dates:
-            shops = search_shops_api(
-                area=agg["area"],
-                budget_min=agg["budget"][0],
-                budget_max=agg["budget"][1],
-                cuisine=", ".join(agg["cuisine"]) if agg["cuisine"] else None,
-                size=5,
-                extra_keywords=convo_summary,
-            )
-            proposals.append(
-                {"date": d, "area": agg["area"], "budget": agg["budget"], "cuisine": agg["cuisine"], "shops": shops}
-            )
+        form_inputs = {
+            "area": agg["area"],
+            "budget_min": agg["budget"][0],
+            "budget_max": agg["budget"][1],
+            "cuisine": ", ".join(agg["cuisine"]) if agg["cuisine"] else "",
+        }
 
-        blocks = _proposal_blocks(proposals)
+        try:
+            # 応答用 LLMインスタンス（main_llm）でOK
+            shops = find_shops(
+                llm=llm.main_llm,
+                convo_text=convo_summary,
+                form_inputs=form_inputs,
+                take=3,  # 提案=3
+            )
+        except Exception as e:
+            logger.exception(e)
+            shops = []
+
+        if not shops:
+            say(text="候補が見つかりませんでした。条件を緩めるか、エリア/予算/ジャンルの入力を見直してください。", thread_ts=thread_ts)
+            return
+
+        # 1提案=1店舗。日付は top_dates と対応（足りなければ '-'）
+        proposals_data = []
+        for i in range(3):
+            shop = shops[i] if i < len(shops) else None
+            if not shop:
+                break
+            proposals_data.append({
+                "date": top_dates[i] if i < len(top_dates) else "-",
+                "area": agg["area"],
+                "budget": agg["budget"],
+                "cuisine": agg["cuisine"],
+                "shop": shop,
+            })
+
+        blocks = _proposal_blocks(proposals_data)
         say(text="3つの候補を提示します。投票してください！", blocks=blocks, thread_ts=thread_ts)
 
     # 投票
@@ -422,7 +474,7 @@ def register_kanji_flow(app: App, llm: LLMAgent) -> None:
         counter = tally_votes(thread_ts)
         voted = voters_who_voted(thread_ts)
 
-        # 1) 集計の進捗をスレッドに共有（従来通り）
+        # 1) 集計の進捗をスレッドに共有
         say(text=f"投票を更新: {len(voted)}/{len(eligible)}名が投票済みです。", thread_ts=thread_ts)
 
         # 2) 全員が投票済みなら自動確定 → チャンネルに直接告知

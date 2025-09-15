@@ -1,177 +1,298 @@
 # app/services/shops.py
-import json
+from __future__ import annotations
 import os
-import urllib.parse
-from typing import Dict, List, Optional
+import json
+import re
+from typing import Dict, List, Optional, Tuple, Any
 
+import requests
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-PREF_DOMAINS = ("tabelog.com", "hotpepper.jp", "gnavi.co.jp", "ikkyu.com", "retty.me")
+# ---- Hot Pepper API 基本設定 ----
+HOTPEPPER_API_KEY_ENV = "HOTPEPPER_API_KEY"
+HOTPEPPER_ENDPOINT = "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
+MAX_API_COUNT = 50  # 仕様に合わせて最大50件に圧縮
 
-# 各サイトの「安全な着地点」（モデルが不正URLを返した場合のフォールバック先）
-SAFE_DOMAIN_HOMEPAGES = {
-    "tabelog.com": "https://tabelog.com/",
-    "hotpepper.jp": "https://www.hotpepper.jp/",
-    "gnavi.co.jp": "https://www.gnavi.co.jp/",
-    "ikkyu.com": "https://restaurant.ikyu.com/",
-    "retty.me": "https://retty.me/",
+# ---- ジャンルコード簡易マッピング（代表的なもののみ）----
+# 参考: ホットペッパーの genre / large_service_area 等のコード
+GENRE_MAP: Dict[str, str] = {
+    "居酒屋": "G001",
+    "ダイニングバー": "G002",
+    "ダイニング": "G002",
+    "創作料理": "G003",
+    "和食": "G004",
+    "洋食": "G005",
+    "イタリアン": "G006",
+    "フレンチ": "G006",  # イタフレ同一扱い（簡易）
+    "中華": "G007",
+    "焼肉": "G008",
+    "韓国料理": "G017",
+    "アジア": "G009",
+    "各国料理": "G010",
+    "カラオケ": "G011",
+    "バー": "G012",
+    "バル": "G012",
+    "カフェ": "G013",
+    "スイーツ": "G014",
+    "ラーメン": "G015",
+    "お好み焼き": "G016",
+    "もんじゃ": "G016",
+    "郷土料理": "G004",
+    "海鮮": "G004",
+    "寿司": "G004",
+    "焼鳥": "G001",  # 便宜上、居酒屋に寄せる
 }
 
-def _mk_query(
-    area: Optional[str],
-    cuisine: Optional[str],
-    budget_min: Optional[int],
-    budget_max: Optional[int],
-    extra: Optional[str],
-) -> str:
-    parts: List[str] = []
-    if area: parts.append(str(area))
-    if cuisine: parts.append(str(cuisine))
-    if budget_min and budget_max: parts.append(f"予算 {budget_min}-{budget_max}円")
-    parts += ["飲み会", "居酒屋", "予約"]
-    if extra:
-        parts.append(str(extra)[:200])  # 会話要約は短く
-    return " ".join(p for p in parts if p)
+# ---- 予算コードの近似マッピング（下限/上限の中央値で近いコードへ）----
+# 参考: APIの budget パラメータ（B001..B010 相当）
+BUDGET_BINS: List[Tuple[str, Tuple[int, int]]] = [
+    ("B001", (0, 500)),      # ～500円
+    ("B002", (501, 1000)),   # 501～1000
+    ("B003", (1001, 1500)),
+    ("B004", (1501, 2000)),
+    ("B005", (2001, 3000)),
+    ("B006", (3001, 4000)),
+    ("B007", (4001, 5000)),
+    ("B008", (5001, 7000)),
+    ("B009", (7001, 10000)),
+    ("B010", (10001, 9999999)),  # 10001円～
+]
 
-def _extract_json(text: str) -> List[Dict]:
-    """
-    モデル応答から JSON 配列部分だけを抽出して parse。失敗時は空配列。
-    """
+def _pick_budget_code(bmin: Optional[int], bmax: Optional[int]) -> Optional[str]:
+    if bmin is None and bmax is None:
+        return None
+    vals = []
+    if isinstance(bmin, int): vals.append(bmin)
+    if isinstance(bmax, int): vals.append(bmax)
+    if not vals:
+        return None
+    target = sum(vals) // len(vals)
+    for code, (lo, hi) in BUDGET_BINS:
+        if lo <= target <= hi:
+            return code
+    return None
+
+def _parse_int_safe(s: Any) -> Optional[int]:
     try:
-        # ```json ... ``` にも対応
-        if "```" in text:
-            chunks = text.split("```")
-            text = chunks[-2] if len(chunks) >= 2 else text
+        if s is None:
+            return None
+        if isinstance(s, (int, float)):
+            return int(s)
+        return int(re.sub(r"[^\d]", "", str(s)))
+    except Exception:
+        return None
+
+# ---- 意図理解（自然文 -> 構造化） ----
+def interpret_preferences_with_llm(
+    llm: ChatGoogleGenerativeAI,
+    convo_text: str,
+    current: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    会話要約などの自然文から、検索に必要な構造化項目を抽出する。
+    current でフォーム等の既存値を受け取り、空欄は LLM が推定/補完する。
+    返却: {
+      "area": str | None,
+      "lat": float | None, "lng": float | None, "range_m": int | None,  # 半径
+      "date": str | None, "people": int | None,
+      "budget_min": int | None, "budget_max": int | None,
+      "genres": List[str],  # 自然文のジャンル
+      "constraints": { "private_room": bool, "non_smoking": bool, "card": bool, "child": bool, "free_drink": bool }
+    }
+    """
+    current = current or {}
+    sys_prompt = (
+        "あなたは宴会・飲み会の幹事アシスタントです。"
+        "入力テキストから次のJSON形式で情報を抽出して返してください。"
+        "必ずJSONのみ、余分な文字は出力しないでください。\n"
+        "schema:\n"
+        "{"
+        "  \"area\": string|null,"
+        "  \"lat\": number|null, \"lng\": number|null, \"range_m\": number|null,"
+        "  \"date\": string|null, \"people\": number|null,"
+        "  \"budget_min\": number|null, \"budget_max\": number|null,"
+        "  \"genres\": string[],"
+        "  \"constraints\": {"
+        "    \"private_room\": boolean, \"non_smoking\": boolean, \"card\": boolean, \"child\": boolean, \"free_drink\": boolean"
+        "  }"
+        "}"
+        "注意: 不明な項目は null、genres は日本語の一般名詞で。"
+    )
+    user_prompt = (
+        "入力:\n"
+        f"{convo_text[:1200]}\n\n"
+        "既知の現在値（無い場合は空）:\n"
+        f"{json.dumps(current, ensure_ascii=False)}"
+    )
+    try:
+        resp = llm.invoke([("system", sys_prompt), ("human", user_prompt)])
+        text = resp.content if hasattr(resp, "content") else str(resp)
         data = json.loads(text)
-        if isinstance(data, list):
-            return data
+        # 最低限のバリデーション/整形
+        out = {
+            "area": (data.get("area") or current.get("area")) or None,
+            "lat": data.get("lat"),
+            "lng": data.get("lng"),
+            "range_m": _parse_int_safe(data.get("range_m")),
+            "date": data.get("date"),
+            "people": _parse_int_safe(data.get("people")),
+            "budget_min": _parse_int_safe(data.get("budget_min") or current.get("budget_min")),
+            "budget_max": _parse_int_safe(data.get("budget_max") or current.get("budget_max")),
+            "genres": [str(g) for g in (data.get("genres") or []) if str(g).strip()],
+            "constraints": {
+                "private_room": bool((data.get("constraints") or {}).get("private_room")),
+                "non_smoking": bool((data.get("constraints") or {}).get("non_smoking")),
+                "card": bool((data.get("constraints") or {}).get("card")),
+                "child": bool((data.get("constraints") or {}).get("child")),
+                "free_drink": bool((data.get("constraints") or {}).get("free_drink")),
+            },
+        }
+        return out
     except Exception:
-        pass
-    # 緩い抽出（[ から最後の ] まで）
-    try:
-        s = text.find("[")
-        e = text.rfind("]")
-        if s != -1 and e != -1 and e > s:
-            data = json.loads(text[s : e + 1])
-            if isinstance(data, list):
-                return data
-    except Exception:
-        pass
-    return []
+        # 失敗時は current をそのまま反映し、constraints/genres を初期化
+        return {
+            "area": current.get("area"),
+            "lat": None, "lng": None, "range_m": None,
+            "date": None, "people": None,
+            "budget_min": _parse_int_safe(current.get("budget_min")),
+            "budget_max": _parse_int_safe(current.get("budget_max")),
+            "genres": [],
+            "constraints": {
+                "private_room": False, "non_smoking": False, "card": False, "child": False, "free_drink": False
+            },
+        }
 
-def _domain_of(url: str) -> str:
-    try:
-        from urllib.parse import urlparse
-        netloc = urlparse(url).netloc.lower()
-        parts = netloc.split(".")
-        if len(parts) >= 2:
-            return ".".join(parts[-2:])
-        return netloc
-    except Exception:
-        return ""
-
-def _sanitize_and_fill(items: List[Dict], size: int, fallback_query: str) -> List[Dict]:
-    """
-    生成結果をドメイン検証して正規化。
-    - name/url の欠落や未知ドメイン → 安全なホーム/検索トップURLに補正
-    - 既知ドメイン以外は除外し、足りない分は安全URLで補完
-    """
-    out: List[Dict] = []
-    seen_urls = set()
-
-    for it in items:
-        name = (it.get("name") or "").strip()
-        url = (it.get("url") or "").strip()
-        budget_label = (it.get("budget_label") or "-").strip() or "-"
-
-        if not name:
+# ---- Hot Pepper 検索 ----
+def _genre_codes_from_names(names: List[str]) -> List[str]:
+    codes = []
+    for n in names:
+        key = str(n).strip()
+        if not key:
             continue
-
-        dom = _domain_of(url) if url else ""
-        if not url or dom not in PREF_DOMAINS:
-            preferred = None
-            lower = name.lower()
-            if "食べログ" in name or "tabelog" in lower:
-                preferred = "tabelog.com"
-            elif "ホットペッパー" in name or "hotpepper" in lower:
-                preferred = "hotpepper.jp"
-            elif "ぐるなび" in name or "gnavi" in lower:
-                preferred = "gnavi.co.jp"
-            elif "一休" in name or "ikyu" in lower:
-                preferred = "ikkyu.com"
-            elif "retty" in lower or "レッティ" in name:
-                preferred = "retty.me"
-
-            if not preferred:
-                preferred = list(SAFE_DOMAIN_HOMEPAGES.keys())[len(out) % len(SAFE_DOMAIN_HOMEPAGES)]
-            url = SAFE_DOMAIN_HOMEPAGES.get(preferred, "https://tabelog.com/")
-
-        if url in seen_urls:
+        # 完全一致 → 前方一致 → 部分一致 のゆるいマッチ
+        if key in GENRE_MAP:
+            codes.append(GENRE_MAP[key])
             continue
-        seen_urls.add(url)
+        for k, v in GENRE_MAP.items():
+            if key.startswith(k) or k in key:
+                codes.append(v)
+                break
+    # 重複排除
+    uniq = []
+    for c in codes:
+        if c not in uniq:
+            uniq.append(c)
+    return uniq
 
-        out.append({"name": name, "url": url, "budget_label": budget_label})
-        if len(out) >= size:
-            break
-
-    i = 0
-    while len(out) < size:
-        dom = list(SAFE_DOMAIN_HOMEPAGES.keys())[i % len(SAFE_DOMAIN_HOMEPAGES)]
-        safe_url = SAFE_DOMAIN_HOMEPAGES[dom]
-        label = f"検索の起点 / {dom}"
-        candidate = {"name": f"{fallback_query}（{label}）", "url": safe_url, "budget_label": "-"}
-        if candidate["url"] not in seen_urls:
-            out.append(candidate)
-            seen_urls.add(candidate["url"])
-        i += 1
-
-    return out[:size]
-
-def search_shops_api(
-    area: Optional[str],
+def search_hotpepper_api(
+    area_text: Optional[str],
     budget_min: Optional[int],
     budget_max: Optional[int],
-    cuisine: Optional[str],
-    size: int = 5,
-    extra_keywords: Optional[str] = None,
+    genre_names: Optional[List[str]] = None,
+    constraints: Optional[Dict[str, bool]] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    range_m: Optional[int] = None,
+    count: int = 10,
 ) -> List[Dict]:
     """
-    生成AIのみで候補JSONを作る版。
-    - Google検索ツールは使わない（tools 無し）
-    - 返り値: [{name, url, budget_label}]
-    - URLは既知ドメインに限定・検証。不明/不正なら安全URLに補正。
+    Hot Pepper 公式APIで検索し、最大50件以内を返す。
+    返却: [{ name, url, budget_label, address, access, photo_url }]
     """
-    api_key = os.environ.get("GEMINI_API_KEY_MAIN")
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    api_key = os.environ.get(HOTPEPPER_API_KEY_ENV)
+    if not api_key:
+        raise RuntimeError(f"{HOTPEPPER_API_KEY_ENV} is not set")
 
-    llm = ChatGoogleGenerativeAI(
-        model=model,
-        google_api_key=api_key,
-        temperature=float(os.environ.get("GEMINI_TEMPERATURE_SEARCH", "0.2")),
+    params: Dict[str, Any] = {
+        "key": api_key,
+        "format": "json",
+        "count": min(count, MAX_API_COUNT),
+        "order": 4,  # 推奨順（レビュー等を考慮）。必要に応じて調整
+    }
+
+    # 位置検索（lat/lng + range）優先。なければテキストキーワードで area を使う
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+        params["lat"] = float(lat)
+        params["lng"] = float(lng)
+        # range: 1(300m),2(500m),3(1000m),4(2000m),5(3000m)
+        rm = int(range_m or 1000)
+        if rm <= 300: params["range"] = 1
+        elif rm <= 500: params["range"] = 2
+        elif rm <= 1000: params["range"] = 3
+        elif rm <= 2000: params["range"] = 4
+        else: params["range"] = 5
+    elif area_text:
+        params["keyword"] = str(area_text)
+
+    # 予算
+    budget_code = _pick_budget_code(budget_min, budget_max)
+    if budget_code:
+        params["budget"] = budget_code
+
+    # ジャンル
+    if genre_names:
+        codes = _genre_codes_from_names(genre_names)
+        # APIは genre 単一のみを受け付けるため、ここでは最初の1つに絞る（必要なら絞り込みを繰り返すロジックに拡張可）
+        if codes:
+            params["genre"] = codes[0]
+
+    # 各種制約
+    c = constraints or {}
+    if c.get("private_room"): params["private_room"] = 1
+    if c.get("non_smoking"): params["non_smoking"] = 1
+    if c.get("card"): params["card"] = 1
+    if c.get("child"): params["child"] = 1
+    if c.get("free_drink"): params["free_drink"] = 1
+
+    # 実行
+    r = requests.get(HOTPEPPER_ENDPOINT, params=params, timeout=10)
+    r.raise_for_status()
+    payload = r.json()
+
+    shops = (payload.get("results") or {}).get("shop") or []
+    out: List[Dict] = []
+    for s in shops:
+        out.append({
+            "name": s.get("name"),
+            "url": (s.get("urls") or {}).get("pc"),
+            "budget_label": (s.get("budget") or {}).get("name"),
+            "address": s.get("address"),
+            "access": s.get("access"),
+            "photo_url": ((s.get("photo") or {}).get("pc") or {}).get("m"),
+        })
+    return out
+
+# ---- 上位関数：会話→正規化→検索 ----
+def find_shops(
+    llm: ChatGoogleGenerativeAI,
+    convo_text: str,
+    form_inputs: Dict[str, Any],
+    take: int = 3,
+) -> List[Dict]:
+    """
+    1) LLMで意図理解し正規化
+    2) Hot Pepper APIでフィルタ検索（最大50件→上位take件を返す）
+    """
+    normalized = interpret_preferences_with_llm(
+        llm=llm,
+        convo_text=convo_text,
+        current={
+            "area": form_inputs.get("area"),
+            "budget_min": form_inputs.get("budget_min"),
+            "budget_max": form_inputs.get("budget_max"),
+            "genres": [g.strip() for g in (form_inputs.get("cuisine") or "").split(",") if g.strip()],
+        },
     )
 
-    q = _mk_query(area, cuisine, budget_min, budget_max, extra_keywords)
-
-    system = (
-        "あなたはグルメ店候補を要件に沿って提案するアシスタントです。"
-        "以下の制約で JSON 配列のみを返してください（前後の説明文は一切不要）。\n"
-        f"- 配列要素は最大 {size} 件\n"
-        "- 各要素は {name, url, budget_label} をキーに持つオブジェクト\n"
-        "- url は次のいずれかのドメインに限定: " + ", ".join(PREF_DOMAINS) + "\n"
-        "- 同一店舗の重複は除外\n"
-        "- 不明な場合は、そのサイトのトップページURLを入れて構いません\n"
+    shops = search_hotpepper_api(
+        area_text=normalized.get("area"),
+        budget_min=normalized.get("budget_min"),
+        budget_max=normalized.get("budget_max"),
+        genre_names=normalized.get("genres"),
+        constraints=normalized.get("constraints"),
+        lat=normalized.get("lat"),
+        lng=normalized.get("lng"),
+        range_m=normalized.get("range_m"),
+        count=min(MAX_API_COUNT, max(take, 10)),  # ある程度多めに取得
     )
-
-    user = (
-        "次の希望条件に合う飲食店の候補を返してください。\n"
-        f"条件: {q}\n"
-        "出力は JSON 配列のみ。余計な文章は出力しないでください。"
-    )
-
-    try:
-        resp = llm.invoke([("system", system), ("human", user)])
-        text = resp.content if hasattr(resp, "content") else str(resp)
-        items = _extract_json(text)
-        return _sanitize_and_fill(items, size=size, fallback_query=q)
-    except Exception:
-        return _sanitize_and_fill([], size=size, fallback_query=q)
+    return shops[:take]
