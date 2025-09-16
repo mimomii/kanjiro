@@ -9,58 +9,37 @@ from typing import Dict, List, Optional, Tuple, Any
 import requests
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-# ---- Hot Pepper API 基本設定 ----
+# ===================== 基本設定 =====================
+# 直書きAPIキーを使いたい場合はここにセット（空なら環境変数を使用）
+API_KEY_DIRECT = os.environ.get("HOTPEPPER_API_KEY_DIRECT", "").strip()
 HOTPEPPER_API_KEY_ENV = "HOTPEPPER_API_KEY"
-# 公式リファレンスは http を掲示。まず http を試し、必要に応じて https にフォールバックする
-HOTPEPPER_ENDPOINT_HTTP = "http://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
-HOTPEPPER_ENDPOINT_HTTPS = "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
-MAX_API_COUNT = 50  # 仕様に合わせた上限（運用上は50で十分。公式の最大は100）
+
+# 公式リファレンスの http を既定に。環境によって https が必要なら Fallback
+ENDPOINT_HTTP = "http://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
+ENDPOINT_HTTPS = "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
+
+MAX_API_COUNT = 50
 DEFAULT_TIMEOUT = 8.0
-DEFAULT_RETRIES = 2
+DEFAULT_RETRIES = 1
 DEFAULT_BACKOFF = 0.8
 
 DEBUG = os.environ.get("HOTPEPPER_DEBUG") == "1"
 
-# ---- ジャンルコード簡易マッピング（代表的なもののみ）----
+# ===================== マッピング類 =====================
 GENRE_MAP: Dict[str, str] = {
-    "居酒屋": "G001",
-    "ダイニングバー": "G002",
-    "ダイニング": "G002",
-    "創作料理": "G003",
-    "和食": "G004",
-    "洋食": "G005",
-    "イタリアン": "G006",
-    "フレンチ": "G006",
-    "中華": "G007",
-    "焼肉": "G008",
-    "韓国料理": "G017",
-    "アジア": "G009",
-    "各国料理": "G010",
-    "カラオケ": "G011",
-    "バー": "G012",
-    "バル": "G012",
-    "カフェ": "G013",
-    "スイーツ": "G014",
-    "ラーメン": "G015",
-    "お好み焼き": "G016",
-    "もんじゃ": "G016",
-    "郷土料理": "G004",
-    "海鮮": "G004",
-    "寿司": "G004",
-    "焼鳥": "G001",  # 便宜上、居酒屋に寄せる
+    "居酒屋": "G001", "ダイニングバー": "G002", "ダイニング": "G002", "創作料理": "G003",
+    "和食": "G004", "洋食": "G005", "イタリアン": "G006", "フレンチ": "G006",
+    "中華": "G007", "焼肉": "G008", "韓国料理": "G017", "アジア": "G009",
+    "各国料理": "G010", "カラオケ": "G011", "バー": "G012", "バル": "G012",
+    "カフェ": "G013", "スイーツ": "G014", "ラーメン": "G015",
+    "お好み焼き": "G016", "もんじゃ": "G016", "郷土料理": "G004", "海鮮": "G004",
+    "寿司": "G004", "焼鳥": "G001",
 }
 
-# ---- 予算コードの近似マッピング（下限/上限の中央値で近いコードへ）----
 BUDGET_BINS: List[Tuple[str, Tuple[int, int]]] = [
-    ("B001", (0, 500)),
-    ("B002", (501, 1000)),
-    ("B003", (1001, 1500)),
-    ("B004", (1501, 2000)),
-    ("B005", (2001, 3000)),
-    ("B006", (3001, 4000)),
-    ("B007", (4001, 5000)),
-    ("B008", (5001, 7000)),
-    ("B009", (7001, 10000)),
+    ("B001", (0, 500)), ("B002", (501, 1000)), ("B003", (1001, 1500)),
+    ("B004", (1501, 2000)), ("B005", (2001, 3000)), ("B006", (3001, 4000)),
+    ("B007", (4001, 5000)), ("B008", (5001, 7000)), ("B009", (7001, 10000)),
     ("B010", (10001, 9999999)),
 ]
 
@@ -68,10 +47,8 @@ def _pick_budget_code(bmin: Optional[int], bmax: Optional[int]) -> Optional[str]
     if bmin is None and bmax is None:
         return None
     vals = []
-    if isinstance(bmin, int):
-        vals.append(bmin)
-    if isinstance(bmax, int):
-        vals.append(bmax)
+    if isinstance(bmin, int): vals.append(bmin)
+    if isinstance(bmax, int): vals.append(bmax)
     if not vals:
         return None
     target = sum(vals) // len(vals)
@@ -90,16 +67,12 @@ def _parse_int_safe(s: Any) -> Optional[int]:
     except Exception:
         return None
 
-# ---- 意図理解（自然文 -> 構造化） ----
+# ===================== LLM: 自然文 → 構造化 =====================
 def interpret_preferences_with_llm(
     llm: ChatGoogleGenerativeAI,
     convo_text: str,
     current: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    会話要約などの自然文から、検索に必要な構造化項目を抽出する。
-    current でフォーム等の既存値を受け取り、空欄は LLM が推定/補完する。
-    """
     current = current or {}
     sys_prompt = (
         "あなたは宴会・飲み会の幹事アシスタントです。"
@@ -126,9 +99,9 @@ def interpret_preferences_with_llm(
     )
     try:
         resp = llm.invoke([("system", sys_prompt), ("human", user_prompt)])
-        text = resp.content if hasattr(resp, "content") else str(resp)
+        text = getattr(resp, "content", str(resp))
         data = json.loads(text)
-        out = {
+        return {
             "area": (data.get("area") or current.get("area")) or None,
             "lat": data.get("lat"),
             "lng": data.get("lng"),
@@ -146,7 +119,6 @@ def interpret_preferences_with_llm(
                 "free_drink": bool((data.get("constraints") or {}).get("free_drink")),
             },
         }
-        return out
     except Exception:
         return {
             "area": current.get("area"),
@@ -160,62 +132,47 @@ def interpret_preferences_with_llm(
             },
         }
 
-# ---- Hot Pepper 検索（下位：HTTP呼び出し + エラーハンドリング/リトライ） ----
-def _endpoint_candidates() -> List[str]:
-    # まず http を試し、必要に応じて https でも試す
-    return [HOTPEPPER_ENDPOINT_HTTP, HOTPEPPER_ENDPOINT_HTTPS]
+# ===================== HTTP 呼び出し芯（デバッグ版を移植） =====================
+def _resolve_api_key() -> str:
+    if API_KEY_DIRECT:
+        return API_KEY_DIRECT
+    key = os.environ.get(HOTPEPPER_API_KEY_ENV, "").strip()
+    if not key:
+        raise RuntimeError(f"{HOTPEPPER_API_KEY_ENV} is not set (and API_KEY_DIRECT is empty)")
+    return key
 
-def _call_hotpepper(params: Dict[str, Any],
-                    timeout_sec: float = DEFAULT_TIMEOUT,
-                    retries: int = DEFAULT_RETRIES,
-                    backoff_sec: float = DEFAULT_BACKOFF) -> Dict[str, Any]:
-    api_key = os.environ.get(HOTPEPPER_API_KEY_ENV)
-    if not api_key:
-        raise RuntimeError(f"{HOTPEPPER_API_KEY_ENV} is not set")
-
-    # ベースパラメータ
-    p: Dict[str, Any] = {
-        "key": api_key,
-        "format": "json",
-        "count": min(max(1, int(params.pop("count", 10))), MAX_API_COUNT),
-        "order": 4,
-    }
-    p.update(params)
+def _call(params: Dict[str, Any], timeout_sec: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+    """公式サンプル形の最小クエリで叩く。既定は http。必要なら https も試す。"""
+    api_key = _resolve_api_key()
+    base = {"key": api_key, "format": "json", "count": min(20, MAX_API_COUNT), "order": 4}
+    p = {**base, **params}
 
     last_exc: Optional[Exception] = None
-    for attempt in range(retries + 1):
-        for endpoint in _endpoint_candidates():
+    for endpoint in (ENDPOINT_HTTP, ENDPOINT_HTTPS):
+        try:
+            r = requests.get(endpoint, params=p, timeout=timeout_sec)
+            dbg_url = ""
             try:
-                r = requests.get(endpoint, params=p, timeout=timeout_sec)
-                # デバッグ：URL表示（キーは伏せる）
-                if DEBUG:
-                    try:
-                        dbg_url = r.request.url.replace(api_key, "****")
-                    except Exception:
-                        dbg_url = f"{endpoint}?<masked>"
-                    print(f"[HOTPEPPER][GET] {dbg_url}")
-                r.raise_for_status()
-                data = r.json()
+                dbg_url = r.request.url.replace(api_key, "****")
+            except Exception:
+                pass
+            if DEBUG and dbg_url:
+                print(f"[GET] {dbg_url}")
+            r.raise_for_status()
+            data = r.json()
+            # APIエラー（キー不備やレートなど）は results.error に乗る
+            if "error" in (data.get("results") or {}):
+                raise RuntimeError(f"HotPepper API error: {data['results']['error']}")
+            return data
+        except Exception as e:
+            last_exc = e
+            # 次のエンドポイント（https）で再試行
+            continue
+    raise last_exc or RuntimeError("HotPepper API call failed")
 
-                # エラーレスポンスを検出して投げ直す
-                results = data.get("results") or {}
-                if "error" in results:
-                    raise RuntimeError(f"HotPepper API error: {results['error']}")
-                return data
-            except Exception as e:
-                last_exc = e
-                # https を試し終わったらリトライ待機
-        if attempt < retries:
-            sleep = backoff_sec * (2 ** attempt)
-            if DEBUG:
-                print(f"[HOTPEPPER][WARN] attempt {attempt+1}/{retries+1} failed: {last_exc}. retry in {sleep:.1f}s")
-            time.sleep(sleep)
-    # すべて失敗
-    raise last_exc if last_exc else RuntimeError("HotPepper API call failed (unknown error)")
-
-# ---- Hot Pepper 検索（上位：パラメタ構築） ----
+# ===================== パラメタ整形 & 検索 =====================
 def _genre_codes_from_names(names: List[str]) -> List[str]:
-    codes = []
+    codes: List[str] = []
     for n in names:
         key = str(n).strip()
         if not key:
@@ -249,25 +206,22 @@ def search_hotpepper_api(
     Hot Pepper 公式APIで検索し、最大MAX_API_COUNT件以内を返す。
     返却: [{ name, url, budget_label, address, access, photo_url }]
     """
-    params: Dict[str, Any] = {"count": count}
+    # ---- まずは最小条件で素直に叩く（デバッグ版の思想） ----
+    params: Dict[str, Any] = {"count": min(max(1, count), MAX_API_COUNT)}
 
-    # 位置検索（lat/lng + range）優先。なければテキストキーワードで area を使う
+    # 位置検索（lat/lng + range）優先。なければ keyword
     if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
-        params["lat"] = float(lat)
-        params["lng"] = float(lng)
-        rm = int(range_m or 1000)  # 既定1km
-        if rm <= 300: params["range"] = 1
-        elif rm <= 500: params["range"] = 2
-        elif rm <= 1000: params["range"] = 3
-        elif rm <= 2000: params["range"] = 4
-        else: params["range"] = 5
+        params.update({"lat": float(lat), "lng": float(lng)})
+        # range: 1(300m) 2(500m) 3(1000m) 4(2000m) 5(3000m)
+        rm = int(range_m or 1000)
+        params["range"] = 1 if rm <= 300 else 2 if rm <= 500 else 3 if rm <= 1000 else 4 if rm <= 2000 else 5
     elif area_text:
         params["keyword"] = str(area_text)
 
-    # 予算
-    budget_code = _pick_budget_code(budget_min, budget_max)
-    if budget_code:
-        params["budget"] = budget_code
+    # 予算コード（中央値近似）
+    bcode = _pick_budget_code(budget_min, budget_max)
+    if bcode:
+        params["budget"] = bcode
 
     # ジャンル（単一のみ）
     if genre_names:
@@ -275,7 +229,7 @@ def search_hotpepper_api(
         if codes:
             params["genre"] = codes[0]
 
-    # 各種制約（立て過ぎると0件化しやすい点に注意）
+    # 制約（多すぎると0件化しやすい）
     c = constraints or {}
     if c.get("private_room"): params["private_room"] = 1
     if c.get("non_smoking"): params["non_smoking"] = 1
@@ -284,9 +238,9 @@ def search_hotpepper_api(
     if c.get("free_drink"): params["free_drink"] = 1
 
     # 実行
-    payload = _call_hotpepper(params, timeout_sec=DEFAULT_TIMEOUT, retries=DEFAULT_RETRIES, backoff_sec=DEFAULT_BACKOFF)
-    shops = (payload.get("results") or {}).get("shop") or []
+    data = _call(params, timeout_sec=DEFAULT_TIMEOUT)
 
+    shops = (data.get("results") or {}).get("shop") or []
     out: List[Dict] = []
     for s in shops:
         out.append({
@@ -299,7 +253,7 @@ def search_hotpepper_api(
         })
     return out
 
-# ---- 上位関数：会話→正規化→検索 ----
+# ===================== 上位：会話 → 正規化 → 検索 =====================
 def find_shops(
     llm: ChatGoogleGenerativeAI,
     convo_text: str,
@@ -308,7 +262,7 @@ def find_shops(
 ) -> List[Dict]:
     """
     1) LLMで意図理解し正規化
-    2) Hot Pepper APIでフィルタ検索（最大MAX_API_COUNT件→上位take件を返す）
+    2) Hot Pepper APIでフィルタ検索（最大MAX_API_COUNT件→上位take件）
     """
     normalized = interpret_preferences_with_llm(
         llm=llm,
