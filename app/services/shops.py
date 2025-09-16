@@ -10,22 +10,14 @@ import requests
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ===================== 基本設定 =====================
-# 直書きAPIキーを使いたい場合はここにセット（空なら環境変数を使用）
-API_KEY_DIRECT = os.environ.get("HOTPEPPER_API_KEY_DIRECT", "").strip()
-HOTPEPPER_API_KEY_ENV = "HOTPEPPER_API_KEY"
-
-# 公式リファレンスの http を既定に。環境によって https が必要なら Fallback
-ENDPOINT_HTTP = "http://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
-ENDPOINT_HTTPS = "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/"
-
+HOTPEPPER_API_KEY_ENV = "HOTPEPPER_API_KEY"  # 必須: 環境変数から与える
+ENDPOINT_HTTP = "http://webservice.recruit.co.jp/hotpepper/gourmet/v1/"   # 公式に合わせて http
+ENDPOINT_HTTPS = "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/" # 念のためフォールバック
 MAX_API_COUNT = 50
 DEFAULT_TIMEOUT = 8.0
-DEFAULT_RETRIES = 1
-DEFAULT_BACKOFF = 0.8
-
 DEBUG = os.environ.get("HOTPEPPER_DEBUG") == "1"
 
-# ===================== マッピング類 =====================
+# ===================== マッピング（debug版に準拠/拡張可） =====================
 GENRE_MAP: Dict[str, str] = {
     "居酒屋": "G001", "ダイニングバー": "G002", "ダイニング": "G002", "創作料理": "G003",
     "和食": "G004", "洋食": "G005", "イタリアン": "G006", "フレンチ": "G006",
@@ -37,15 +29,12 @@ GENRE_MAP: Dict[str, str] = {
 }
 
 BUDGET_BINS: List[Tuple[str, Tuple[int, int]]] = [
-    ("B001", (0, 500)), ("B002", (501, 1000)), ("B003", (1001, 1500)),
-    ("B004", (1501, 2000)), ("B005", (2001, 3000)), ("B006", (3001, 4000)),
-    ("B007", (4001, 5000)), ("B008", (5001, 7000)), ("B009", (7001, 10000)),
-    ("B010", (10001, 9999999)),
+    ("B005", (2001, 3000)), ("B006", (3001, 4000)), ("B007", (4001, 5000)),
+    ("B008", (5001, 7000)), ("B009", (7001, 10000)), ("B010", (10001, 9999999)),
+    # 必要なら B001〜B004 も追加可能
 ]
 
 def _pick_budget_code(bmin: Optional[int], bmax: Optional[int]) -> Optional[str]:
-    if bmin is None and bmax is None:
-        return None
     vals = []
     if isinstance(bmin, int): vals.append(bmin)
     if isinstance(bmax, int): vals.append(bmax)
@@ -59,15 +48,13 @@ def _pick_budget_code(bmin: Optional[int], bmax: Optional[int]) -> Optional[str]
 
 def _parse_int_safe(s: Any) -> Optional[int]:
     try:
-        if s is None:
-            return None
-        if isinstance(s, (int, float)):
-            return int(s)
+        if s is None: return None
+        if isinstance(s, (int, float)): return int(s)
         return int(re.sub(r"[^\d]", "", str(s)))
     except Exception:
         return None
 
-# ===================== LLM: 自然文 → 構造化 =====================
+# ===================== LLM: 自然文 → 構造化（既存のまま） =====================
 def interpret_preferences_with_llm(
     llm: ChatGoogleGenerativeAI,
     convo_text: str,
@@ -132,18 +119,16 @@ def interpret_preferences_with_llm(
             },
         }
 
-# ===================== HTTP 呼び出し芯（デバッグ版を移植） =====================
-def _resolve_api_key() -> str:
-    if API_KEY_DIRECT:
-        return API_KEY_DIRECT
+# ===================== HTTP 呼び出し（debug版の芯） =====================
+def _api_key() -> str:
     key = os.environ.get(HOTPEPPER_API_KEY_ENV, "").strip()
     if not key:
-        raise RuntimeError(f"{HOTPEPPER_API_KEY_ENV} is not set (and API_KEY_DIRECT is empty)")
+        raise RuntimeError(f"{HOTPEPPER_API_KEY_ENV} is not set")
     return key
 
 def _call(params: Dict[str, Any], timeout_sec: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
-    """公式サンプル形の最小クエリで叩く。既定は http。必要なら https も試す。"""
-    api_key = _resolve_api_key()
+    """debug版の最小形：http を既定、必要なら https にフォールバック。results.error を検出。"""
+    api_key = _api_key()
     base = {"key": api_key, "format": "json", "count": min(20, MAX_API_COUNT), "order": 4}
     p = {**base, **params}
 
@@ -151,22 +136,22 @@ def _call(params: Dict[str, Any], timeout_sec: float = DEFAULT_TIMEOUT) -> Dict[
     for endpoint in (ENDPOINT_HTTP, ENDPOINT_HTTPS):
         try:
             r = requests.get(endpoint, params=p, timeout=timeout_sec)
-            dbg_url = ""
-            try:
-                dbg_url = r.request.url.replace(api_key, "****")
-            except Exception:
-                pass
-            if DEBUG and dbg_url:
-                print(f"[GET] {dbg_url}")
+            # デバッグURL（キーは伏せる）
+            if DEBUG:
+                try:
+                    dbg_url = r.request.url.replace(api_key, "****")
+                    print(f"[GET] {dbg_url}")
+                except Exception:
+                    pass
             r.raise_for_status()
             data = r.json()
-            # APIエラー（キー不備やレートなど）は results.error に乗る
             if "error" in (data.get("results") or {}):
+                # 公式は results.error に詳細を載せる
                 raise RuntimeError(f"HotPepper API error: {data['results']['error']}")
             return data
         except Exception as e:
             last_exc = e
-            # 次のエンドポイント（https）で再試行
+            # https で再試行 → それでもダメなら例外
             continue
     raise last_exc or RuntimeError("HotPepper API call failed")
 
@@ -206,30 +191,29 @@ def search_hotpepper_api(
     Hot Pepper 公式APIで検索し、最大MAX_API_COUNT件以内を返す。
     返却: [{ name, url, budget_label, address, access, photo_url }]
     """
-    # ---- まずは最小条件で素直に叩く（デバッグ版の思想） ----
+    # debug版思想：まず最小条件で素直に叩く
     params: Dict[str, Any] = {"count": min(max(1, count), MAX_API_COUNT)}
 
     # 位置検索（lat/lng + range）優先。なければ keyword
     if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
         params.update({"lat": float(lat), "lng": float(lng)})
-        # range: 1(300m) 2(500m) 3(1000m) 4(2000m) 5(3000m)
-        rm = int(range_m or 1000)
+        rm = int(range_m or 1000)  # 既定1km
         params["range"] = 1 if rm <= 300 else 2 if rm <= 500 else 3 if rm <= 1000 else 4 if rm <= 2000 else 5
     elif area_text:
         params["keyword"] = str(area_text)
 
-    # 予算コード（中央値近似）
-    bcode = _pick_budget_code(budget_min, budget_max)
-    if bcode:
-        params["budget"] = bcode
+    # 予算（中央値近似→コード）
+    b = _pick_budget_code(budget_min, budget_max)
+    if b:
+        params["budget"] = b
 
-    # ジャンル（単一のみ）
+    # ジャンル（単一）
     if genre_names:
         codes = _genre_codes_from_names(genre_names)
         if codes:
             params["genre"] = codes[0]
 
-    # 制約（多すぎると0件化しやすい）
+    # 制約（付け過ぎると0件化しやすい）
     c = constraints or {}
     if c.get("private_room"): params["private_room"] = 1
     if c.get("non_smoking"): params["non_smoking"] = 1
